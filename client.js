@@ -264,6 +264,12 @@ window.__ModuleLoader__.load({
 .wsg-menu-icon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:20px;flex:none;color:var(--dsw-alias-label-secondary)}
 .wsg-menu-badge{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1}
 .wsg-badge-picker{display:flex;flex-direction:column;gap:8px;width:100%;max-width:232px;padding:2px 0}
+.wsg-badge-fill{max-width:none}
+.wsg-badge-fill .wsg-badge-colors{display:grid;grid-template-columns:repeat(8,1fr);justify-items:center;gap:4px}
+.wsg-badge-fill .wsg-badge-swatch{width:22px;height:22px}
+.wsg-badge-fill .wsg-badge-icons{gap:4px}
+.wsg-badge-fill .wsg-badge-icon-cell{height:34px}
+.wsg-badge-fill .wsg-badge-hash{font-size:15px}
 .wsg-badge-search{display:flex;align-items:center;gap:6px;height:28px;padding:0 6px 0 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-layer-3)}
 .wsg-badge-search:focus-within{border-color:var(--dsw-alias-brand-primary)}
 .wsg-badge-search-input{flex:1;min-width:0;height:100%;border:0;outline:none;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px}
@@ -1692,8 +1698,10 @@ window.__ModuleLoader__.load({
        * Color + glyph picker shared by the badge popover and the create dialog.
        * @param value - the badge being edited.
        * @param onChange - receives the next badge, plus whether the pick settles it.
+       * @param options - `fill` stretches the picker across a dialog's width.
        */
-      const renderBadgePicker = (value, onChange) => {
+      const renderBadgePicker = (value, onChange, options) => {
+        const fill = options !== undefined && options.fill === true
         const shape = badgeShape(value)
         const query = badgeQuery.trim().toLowerCase()
         const icons = BADGE_ICONS.filter(icon => query === ''
@@ -1702,7 +1710,7 @@ window.__ModuleLoader__.load({
           || icon.zh.includes(query))
         const hashVisible = query === '' || '#'.includes(query) || 'hash'.includes(query)
           || '井号'.includes(query) || '默认'.includes(query)
-        return h('div', { key: 'picker', className: 'wsg-badge-picker' },
+        return h('div', { key: 'picker', className: classes('wsg-badge-picker', fill && 'wsg-badge-fill') },
           h('div', { key: 'search', className: 'wsg-badge-search' },
             h('span', { key: 'icon', className: 'wsg-search-icon' }, IconSearch(13)),
             h('input', {
@@ -1753,7 +1761,7 @@ window.__ModuleLoader__.load({
               onClick: () => {
                 onChange({ color: shape === null ? DEFAULT_BADGE_COLOR : shape.color, icon: icon.key }, true)
               },
-            }, strokeIcon(13, icon.shapes))),
+            }, strokeIcon(fill ? 15 : 13, icon.shapes))),
             icons.length === 0 && !hashVisible
               ? h('div', { key: 'none', className: 'wsg-badge-empty' }, t('badge.none'))
               : null),
@@ -1823,7 +1831,7 @@ window.__ModuleLoader__.load({
             }),
             isCreate ? h('div', { key: 'badge-block' },
               h('div', { key: 'label', className: 'wsg-modal-label' }, t('group.badgeTitle')),
-              renderBadgePicker(dialog.badge, (badge) => { patchDialog({ badge: normalizeBadge(badge) }) })) : null,
+              renderBadgePicker(dialog.badge, (badge) => { patchDialog({ badge: normalizeBadge(badge) }) }, { fill: true })) : null,
             dialog.error === null ? null : h('div', { className: 'wsg-modal-error' }, dialog.error),
             h('div', { className: 'wsg-modal-actions' },
               h('button', { type: 'button', className: 'wsg-btn', onClick: () => { if (!dialog.busy) closeDialog() }, disabled: dialog.busy }, t('dialog.cancel')),
