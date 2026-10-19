@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Groups (workspace replacement)",
-    "description": "Replaces the sidebar workspace region with a grouped session view: Groups / Projects tabs, emoji badges, drag membership and ordering, row context menus, local search; stored in this browser."
+    "description": "Replaces the sidebar workspace region with a grouped session view: Groups / Projects tabs, color+icon badges, drag membership and ordering, row context menus, local search; stored in this browser."
   }
 }

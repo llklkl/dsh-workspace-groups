@@ -30,13 +30,59 @@ window.__ModuleLoader__.load({
     const GROUP_PREFIX = 'group:'
     const PROJECT_PREFIX = 'project:'
     const DEFAULT_BADGE = '#'
-    /** Badge choices offered when creating a group or changing its badge. */
-    const BADGE_CHOICES = [
-      '#',
-      '📁', '📌', '🚀', '🧪', '🐞', '📝', '💡', '🎯', '🔧', '📦',
-      '🧭', '🗂️', '📊', '🧩', '🛒', '💬', '⚙️', '🧠', '🌱', '🔥',
-      '⭐', '✅', '🧾', '🧵', '🏷️', '🧮', '🌍',
+    /**
+     * Badge palette: `ink` paints the swatch and the glyph, `wash` is the chip
+     * behind the glyph. These literals are the one deliberate exception to the
+     * token-only rule — a user-picked palette cannot come from theme tokens.
+     */
+    const BADGE_COLORS = [
+      { key: 'slate', zh: '灰', en: 'Slate', ink: '#A9ADB5', wash: 'rgba(169,173,181,.20)' },
+      { key: 'red', zh: '红', en: 'Red', ink: '#E5484D', wash: 'rgba(229,72,77,.18)' },
+      { key: 'orange', zh: '橙', en: 'Orange', ink: '#F76B15', wash: 'rgba(247,107,21,.18)' },
+      { key: 'yellow', zh: '黄', en: 'Yellow', ink: '#DEA32E', wash: 'rgba(222,163,46,.20)' },
+      { key: 'green', zh: '绿', en: 'Green', ink: '#30A46C', wash: 'rgba(48,164,108,.18)' },
+      { key: 'blue', zh: '蓝', en: 'Blue', ink: '#4C6EF5', wash: 'rgba(76,110,245,.18)' },
+      { key: 'purple', zh: '紫', en: 'Purple', ink: '#8E4EC6', wash: 'rgba(142,78,198,.18)' },
+      { key: 'pink', zh: '粉', en: 'Pink', ink: '#E93D82', wash: 'rgba(233,61,130,.18)' },
     ]
+    /** Badge glyphs, hand-drawn on the same 16px grid as the panel icons. */
+    const BADGE_ICONS = [
+      { key: 'folder', zh: '文件夹', en: 'Folder', shapes: ['M2.8 5.6c0-.7.5-1.2 1.2-1.2h2.4l1.4 1.6h4.2c.7 0 1.2.5 1.2 1.2v5c0 .7-.5 1.2-1.2 1.2H4c-.7 0-1.2-.5-1.2-1.2z'] },
+      { key: 'doc', zh: '文档', en: 'Document', shapes: ['M4.6 2.9h4.9l2.9 2.9v7.3H4.6z', 'M9.5 2.9v2.9h2.9', 'M6.3 8.5h3.4', 'M6.3 10.6h3.4'] },
+      { key: 'book', zh: '书', en: 'Book', shapes: ['M2.9 4.5c1.7-.9 3.4-.9 5.1 0 1.7-.9 3.4-.9 5.1 0v7.1c-1.7-.9-3.4-.9-5.1 0-1.7-.9-3.4-.9-5.1 0z', 'M8 4.7v6.9'] },
+      { key: 'cap', zh: '学士帽', en: 'Cap', shapes: ['M8 2.9 13.7 5.7 8 8.5 2.3 5.7z', 'M4.7 7.4v3c0 1 1.5 1.8 3.3 1.8s3.3-.8 3.3-1.8v-3', 'M13.7 5.8v3.3'] },
+      { key: 'pencil', zh: '铅笔', en: 'Pencil', shapes: ['M3.2 12.8l.7-2.8 6.3-6.3 2.1 2.1-6.3 6.3z', 'M9.4 4.7l2.1 2.1'] },
+      { key: 'tag', zh: '标签', en: 'Tag', shapes: ['M3.1 8.5V4.3c0-.7.5-1.2 1.2-1.2h4.2l6.1 6.1-5.4 5.4z', { cx: 5.7, cy: 5.7, r: 0.9 }] },
+      { key: 'code', zh: '代码', en: 'Code', shapes: ['M5.6 4.8 2.8 8l2.8 3.2', 'M10.4 4.8 13.2 8l-2.8 3.2'] },
+      { key: 'terminal', zh: '终端', en: 'Terminal', shapes: ['M3.2 5.6 5.9 8l-2.7 2.4', 'M8 10.4h4.6'] },
+      { key: 'bolt', zh: '闪电', en: 'Bolt', shapes: ['M8.9 2.6 4.5 9h3l-1 4.4L11.5 7H8.6z'] },
+      { key: 'settings', zh: '设置', en: 'Settings', shapes: ['M2.9 5.4h10.2', 'M2.9 10.6h10.2', { cx: 5.6, cy: 5.4, r: 1.1 }, { cx: 10.4, cy: 10.6, r: 1.1 }] },
+      { key: 'target', zh: '目标', en: 'Target', shapes: [{ cx: 8, cy: 8, r: 5.2 }, { cx: 8, cy: 8, r: 1.7 }] },
+      { key: 'chart', zh: '图表', en: 'Chart', shapes: ['M3.6 12.6V9.2', 'M8 12.6V4.5', 'M12.4 12.6V7'] },
+      { key: 'briefcase', zh: '公文包', en: 'Briefcase', shapes: ['M2.9 6.3h10.2v6.2H2.9z', 'M6.1 6.3V5c0-.5.4-.9.9-.9h2c.5 0 .9.4.9.9v1.3', 'M2.9 9.5h10.2'] },
+      { key: 'dollar', zh: '美元', en: 'Dollar', shapes: [{ cx: 8, cy: 8, r: 5.2 }, 'M8 4.8v6.4', 'M9.7 6.4c-.4-.6-1-.9-1.7-.9-.9 0-1.6.5-1.6 1.2s.7 1.1 1.6 1.3c.9.2 1.6.6 1.6 1.3s-.7 1.2-1.6 1.2c-.7 0-1.3-.3-1.7-.9'] },
+      { key: 'music', zh: '音乐', en: 'Music', shapes: ['M6.4 11.4V4.9l6.1-1.2v6.5', { cx: 5.2, cy: 11.4, r: 1.2 }, { cx: 11.3, cy: 10.2, r: 1.2 }] },
+      { key: 'cake', zh: '蛋糕', en: 'Cake', shapes: ['M4.7 8.5h6.6l-.8 4.2c-.1.5-.5.8-1 .8H6.5c-.5 0-.9-.3-1-.8z', 'M4.7 8.5c0-1.8 1.5-3.3 3.3-3.3s3.3 1.5 3.3 3.3', { cx: 8, cy: 3.9, r: 0.8 }] },
+      { key: 'scissors', zh: '剪刀', en: 'Scissors', shapes: [{ cx: 4.7, cy: 11.3, r: 1.4 }, { cx: 11.3, cy: 11.3, r: 1.4 }, 'M5.8 10.3 11 3.7', 'M10.2 10.3 5 3.7'] },
+      { key: 'stethoscope', zh: '听诊器', en: 'Stethoscope', shapes: ['M4.7 3.2v3.3a3.3 3.3 0 0 0 6.6 0V3.2', 'M8 9.9v1.2a2.3 2.3 0 0 0 4.6 0v-.9', { cx: 12.6, cy: 9.4, r: 0.9 }] },
+      { key: 'flask', zh: '烧瓶', en: 'Flask', shapes: ['M6.7 2.8h2.6', 'M7.1 2.8v3.4l-2.7 4.9c-.5 1-.1 2 .9 2h5.4c1 0 1.4-1 .9-2L8.9 6.2V2.8', 'M5.5 9.3h5'] },
+      { key: 'sun', zh: '太阳', en: 'Sun', shapes: [{ cx: 8, cy: 8, r: 3.1 }, 'M8 2.4v1.5', 'M8 12.1v1.5', 'M2.4 8h1.5', 'M12.1 8h1.5', 'M4.2 4.2l1.1 1.1', 'M10.7 10.7l1.1 1.1', 'M11.8 4.2l-1.1 1.1', 'M5.3 10.7l-1.1 1.1'] },
+      { key: 'sprout', zh: '植物', en: 'Sprout', shapes: ['M8 13.3V8.4', 'M8 8.4C8 6.2 6.2 4.4 4 4.4c0 2.2 1.8 4 4 4z', 'M8 8.4c0-2.4 1.8-4.4 4.2-4.4 0 2.4-1.8 4.4-4.2 4.4z'] },
+      { key: 'paw', zh: '爪印', en: 'Paw', shapes: [{ cx: 4.4, cy: 6.2, r: 1.2 }, { cx: 8, cy: 4.9, r: 1.2 }, { cx: 11.6, cy: 6.2, r: 1.2 }, 'M5 9.4c.8-.6 1.9-1 3-1s2.2.4 3 1c.6.5.6 1.4-.1 1.8-.8.5-1.8 1.2-2.9 1.2s-2.1-.7-2.9-1.2c-.7-.4-.7-1.3-.1-1.8z'] },
+      { key: 'heart', zh: '心', en: 'Heart', shapes: ['M8 13.1S2.9 10 2.9 6.7c0-1.9 1.4-3.1 2.9-3.1 1 0 1.8.6 2.2 1.4.4-.8 1.2-1.4 2.2-1.4 1.5 0 2.9 1.2 2.9 3.1 0 3.3-5.1 6.4-5.1 6.4z'] },
+      { key: 'star', zh: '星星', en: 'Star', shapes: ['M8 2.7l1.6 3.5 3.7.4-2.8 2.6.8 3.7L8 11.1l-3.3 1.8.8-3.7L2.7 6.6l3.7-.4z'] },
+      { key: 'check', zh: '完成', en: 'Check', shapes: [{ cx: 8, cy: 8, r: 5.2 }, 'm5.4 8.2 1.8 1.9 3.5-3.9'] },
+      { key: 'plane', zh: '飞机', en: 'Plane', shapes: ['M8 2.7 9 6l3.6 2.3v1.3L9 9.1l-.5 3.2 1.5.9v.7L8 13.3l-2 .6v-.7l1.5-.9L7 9.1 3.4 9.6V8.3L7 6z'] },
+      { key: 'globe', zh: '地球', en: 'Globe', shapes: [{ cx: 8, cy: 8, r: 5.2 }, 'M2.8 8h10.4', 'M8 2.8c1.5 1.6 2.2 3.4 2.2 5.2s-.7 3.6-2.2 5.2c-1.5-1.6-2.2-3.4-2.2-5.2S6.5 4.4 8 2.8z'] },
+      { key: 'compass', zh: '指南针', en: 'Compass', shapes: [{ cx: 8, cy: 8, r: 5.2 }, 'M10.2 5.8 6.6 7.4 5.8 10.2 9.4 8.6z'] },
+      { key: 'flag', zh: '旗帜', en: 'Flag', shapes: ['M4.1 13.2V2.9', 'M4.1 3.3c2.6-1.2 5.6 1.2 8.2 0v4.7c-2.6 1.2-5.6-1.2-8.2 0'] },
+      { key: 'dumbbell', zh: '哑铃', en: 'Dumbbell', shapes: ['M5.2 6.2v3.6', 'M10.8 6.2v3.6', 'M5.2 8h5.6', 'M3.3 7v2', 'M12.7 7v2'] },
+      { key: 'layers', zh: '图层', en: 'Layers', shapes: ['M8 2.9 13 5.6 8 8.3 3 5.6z', 'M3 8.6 8 11.3l5-2.7'] },
+    ]
+    const DEFAULT_BADGE_COLOR = 'blue'
+    const DEFAULT_BADGE_ICON = 'folder'
+    const BADGE_COLOR_MAP = new Map(BADGE_COLORS.map(color => [color.key, color]))
+    const BADGE_ICON_MAP = new Map(BADGE_ICONS.map(icon => [icon.key, icon]))
     const MENU_WIDTH = 208
     const PICKER_WIDTH = 232
     /** Duration of the running spin; mirrors the `wsg-spin` keyframes. */
@@ -75,6 +121,10 @@ window.__ModuleLoader__.load({
       'group.rename':             ['重命名分组', 'Rename group'],
       'group.badge':              ['更换徽章', 'Change badge'],
       'group.badgeTitle':         ['选择徽章', 'Choose a badge'],
+      'badge.search':             ['搜索图标', 'Search icons'],
+      'badge.clear':              ['清除', 'Clear'],
+      'badge.none':               ['没有匹配的图标', 'No matching icons'],
+      'badge.default':            ['默认徽章', 'Default badge'],
       'group.moveUp':             ['上移', 'Move up'],
       'group.moveDown':           ['下移', 'Move down'],
       'group.delete':             ['删除分组', 'Delete group'],
@@ -117,6 +167,8 @@ window.__ModuleLoader__.load({
       'time.minutes':             ['{n}分钟', '{n}min'],
       'time.hours':               ['{n}小时', '{n}h'],
       'time.days':                ['{n}天', '{n}d'],
+      ...Object.fromEntries(BADGE_COLORS.map(color => ['badge.color.' + color.key, [color.zh, color.en]])),
+      ...Object.fromEntries(BADGE_ICONS.map(icon => ['badge.icon.' + icon.key, [icon.zh, icon.en]])),
     }
 
     const ZH = Object.fromEntries(Object.entries(STRINGS).map(([key, pair]) => [key, pair[0]]))
@@ -129,7 +181,7 @@ window.__ModuleLoader__.load({
 .wsg-tabs{display:inline-flex;align-items:center;gap:2px;padding:2px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-2)}
 .wsg-tab{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
 .wsg-tab:hover{color:var(--dsw-alias-label-primary)}
-.wsg-session:hover,.wsg-session-current,.wsg-account-head:hover,.wsg-menu-item:hover,.wsg-btn:hover,.wsg-inline-btn:hover,.wsg-badge-cell:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.wsg-session:hover,.wsg-session-current,.wsg-account-head:hover,.wsg-menu-item:hover,.wsg-btn:hover,.wsg-inline-btn:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .wsg-icon-btn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 .wsg-tab-active{background:var(--dsw-alias-bg-layer-1);box-shadow:var(--dsw-elevation-soft);color:var(--dsw-alias-label-primary)}
 .wsg-tab:focus-visible,.wsg-icon-btn:focus-visible,.wsg-session:focus-visible,.wsg-account-head:focus-visible,.wsg-add:focus-visible,.wsg-dropzone:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary));outline-offset:-2px}
@@ -211,9 +263,24 @@ window.__ModuleLoader__.load({
 .wsg-menu-item:disabled{color:var(--dsw-alias-state-idle-primary);background:transparent;cursor:default}
 .wsg-menu-icon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:20px;flex:none;color:var(--dsw-alias-label-secondary)}
 .wsg-menu-badge{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1}
-.wsg-badge-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;padding:4px 0;width:100%}
-.wsg-badge-cell{display:inline-flex;align-items:center;justify-content:center;width:100%;height:36px;padding:0;border:1px solid transparent;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);font-size:20px;line-height:1;cursor:pointer}
-.wsg-badge-cell-active{border-color:var(--dsw-alias-brand-primary)}
+.wsg-badge-picker{display:flex;flex-direction:column;gap:8px;width:100%;max-width:232px;padding:2px 0}
+.wsg-badge-search{display:flex;align-items:center;gap:6px;height:28px;padding:0 6px 0 8px;border:.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-layer-3)}
+.wsg-badge-search:focus-within{border-color:var(--dsw-alias-brand-primary)}
+.wsg-badge-search-input{flex:1;min-width:0;height:100%;border:0;outline:none;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px}
+.wsg-badge-search-input::placeholder{color:var(--dsw-alias-label-dimmed)}
+.wsg-badge-clear{flex:none;padding:0;border:0;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:11px;line-height:16px;cursor:pointer}
+.wsg-badge-clear:hover{color:var(--dsw-alias-label-primary)}
+.wsg-badge-colors{display:flex;align-items:center;justify-content:space-between;gap:4px}
+.wsg-badge-swatch{width:20px;height:20px;flex:none;padding:0;border:2px solid transparent;border-radius:50%;background-clip:padding-box;cursor:pointer}
+.wsg-badge-swatch-active{border-color:var(--dsw-alias-label-primary)}
+.wsg-badge-swatch:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary));outline-offset:1px}
+.wsg-badge-icons{display:grid;grid-template-columns:repeat(8,1fr);gap:2px}
+.wsg-badge-icon-cell{display:inline-flex;align-items:center;justify-content:center;width:100%;height:26px;padding:0;border:1px solid transparent;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.wsg-badge-icon-cell:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.wsg-badge-icon-cell:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary));outline-offset:-1px}
+.wsg-badge-icon-cell-active{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}
+.wsg-badge-hash{font-size:13px;font-weight:600;line-height:1}
+.wsg-badge-empty{grid-column:1/-1;padding:8px 0;text-align:center;font-size:12px;color:var(--dsw-alias-label-tertiary)}
 .wsg-modal-layer{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center}
 .wsg-modal-scrim{position:absolute;inset:0;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur)}
 .wsg-modal{position:relative;box-sizing:border-box;width:min(380px,calc(100vw - 32px));padding:20px;display:flex;flex-direction:column;gap:12px;border:0;border-radius:var(--dsw-radius-panel);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-elevation-prominent)}
@@ -336,6 +403,39 @@ window.__ModuleLoader__.load({
       { d: 'M6.5 9.5H9.5' },
     ])
 
+    // ---- badges -------------------------------------------------------------
+
+    /**
+     * The color+icon pair a badge carries.
+     * @returns `{color, icon}` when the value is a complete pair, else null —
+     * `#` and the legacy emoji strings render as text.
+     */
+    function badgeShape(badge) {
+      if (!isRecord(badge)) return null
+      if (!BADGE_COLOR_MAP.has(badge.color) || !BADGE_ICON_MAP.has(badge.icon)) return null
+      return { color: badge.color, icon: badge.icon }
+    }
+
+    /**
+     * One badge element, shared by the group head, the context menu and the picker.
+     * @param badge - `#`, a legacy emoji, or a `{color, icon}` pair.
+     * @param className - the circle style of the seat it fills.
+     * @param size - glyph size in px.
+     */
+    function badgeNode(badge, className, size) {
+      const shape = badgeShape(badge)
+      if (shape === null) {
+        return h('span', { key: 'badge', className }, typeof badge === 'string' && badge !== '' ? badge : DEFAULT_BADGE)
+      }
+      const color = BADGE_COLOR_MAP.get(shape.color)
+      const icon = BADGE_ICON_MAP.get(shape.icon)
+      return h('span', {
+        key: 'badge',
+        className,
+        style: { color: color.ink, background: color.wash },
+      }, strokeIcon(size, icon.shapes))
+    }
+
     // ---- persisted viewing state (v3) -------------------------------------
 
     /** Empty persisted state. */
@@ -348,8 +448,13 @@ window.__ModuleLoader__.load({
       return typeof value === 'string' && allowed.includes(value) ? value : fallback
     }
 
-    /** A usable badge string (emoji or the default glyph). */
+    /**
+     * A usable badge: a `{color, icon}` pair, a legacy emoji string, or the
+     * default hash when the value is missing or malformed.
+     */
     function normalizeBadge(value) {
+      const shape = badgeShape(value)
+      if (shape !== null) return shape
       if (typeof value !== 'string') return DEFAULT_BADGE
       const trimmed = value.trim()
       if (trimmed === '' || trimmed.length > 8) return DEFAULT_BADGE
@@ -1048,6 +1153,7 @@ window.__ModuleLoader__.load({
       const [dialog, setDialog] = useState(null)
       const [error, setError] = useState(null)
       const [search, setSearch] = useState('')
+      const [badgeQuery, setBadgeQuery] = useState('')
       const [searchOpen, setSearchOpen] = useState(false)
       const [drag, setDrag] = useState(null)
       const dragRef = useRef(drag)
@@ -1064,13 +1170,14 @@ window.__ModuleLoader__.load({
       const handlerSetRef = useRef([])
       const handlerVersionRef = useRef(0)
 
-      const closePopover = useCallback(() => { setPopover(null) }, [])
+      const closePopover = useCallback(() => { setPopover(null); setBadgeQuery('') }, [])
       const closeDialog = useCallback(() => { setDialog(null) }, [])
       const patchDialog = useCallback((patch) => {
         setDialog(previous => (previous === null ? previous : { ...previous, ...patch }))
       }, [])
       const openDialog = useCallback((kind, fields) => {
         setPopover(null)
+        setBadgeQuery('')
         setDialog({ kind, value: '', badge: DEFAULT_BADGE, error: null, busy: false, ...fields })
       }, [])
 
@@ -1503,7 +1610,7 @@ window.__ModuleLoader__.load({
           entries.push(menuHeading('heading-move', t('session.moveTo')))
           for (const group of view.groups) {
             entries.push(menuItem('move:' + group.id, group.name, () => { assign(sessionId, group.id) }, {
-              icon: () => h('span', { key: 'badge', className: 'wsg-menu-badge' }, group.badge),
+              icon: () => badgeNode(group.badge, 'wsg-menu-badge', 12),
               selected: owner === group.id,
             }))
           }
@@ -1528,7 +1635,10 @@ window.__ModuleLoader__.load({
         const group = index < 0 ? undefined : view.groups[index]
         return [
           menuItem('rename', t('group.rename'), () => { openDialog('renameGroup', { id: groupId, value: group?.name ?? '' }) }),
-          menuItem('badge', t('group.badge'), () => { setPopover({ kind: 'badge', groupId, ...originAt(popover.x, popover.y, PICKER_WIDTH) }) }),
+          menuItem('badge', t('group.badge'), () => {
+            setBadgeQuery('')
+            setPopover({ kind: 'badge', groupId, ...originAt(popover.x, popover.y, PICKER_WIDTH) })
+          }),
           menuItem('up', t('group.moveUp'), () => { moveGroup(groupId, -1) }, { disabled: index <= 0 }),
           menuItem('down', t('group.moveDown'), () => { moveGroup(groupId, 1) }, { disabled: index < 0 || index >= view.groups.length - 1 }),
           menuSeparator('sep'),
@@ -1578,13 +1688,77 @@ window.__ModuleLoader__.load({
         style: { left: popover.x, top: popover.y, width, maxHeight: Math.max(FLYOUT_MIN_HEIGHT, window.innerHeight - popover.y - 16) },
       }, children)
 
-      const renderBadgeGrid = (current, onPick) => h('div', { key: 'grid', className: 'wsg-badge-grid' },
-        BADGE_CHOICES.map(badge => h('button', {
-          key: badge,
-          type: 'button',
-          className: classes('wsg-badge-cell', badge === current && 'wsg-badge-cell-active'),
-          onClick: () => { onPick(badge) },
-        }, badge)))
+      /**
+       * Color + glyph picker shared by the badge popover and the create dialog.
+       * @param value - the badge being edited.
+       * @param onChange - receives the next badge, plus whether the pick settles it.
+       */
+      const renderBadgePicker = (value, onChange) => {
+        const shape = badgeShape(value)
+        const query = badgeQuery.trim().toLowerCase()
+        const icons = BADGE_ICONS.filter(icon => query === ''
+          || icon.key.includes(query)
+          || icon.en.toLowerCase().includes(query)
+          || icon.zh.includes(query))
+        const hashVisible = query === '' || '#'.includes(query) || 'hash'.includes(query)
+          || '井号'.includes(query) || '默认'.includes(query)
+        return h('div', { key: 'picker', className: 'wsg-badge-picker' },
+          h('div', { key: 'search', className: 'wsg-badge-search' },
+            h('span', { key: 'icon', className: 'wsg-search-icon' }, IconSearch(13)),
+            h('input', {
+              key: 'input',
+              className: 'wsg-badge-search-input',
+              value: badgeQuery,
+              placeholder: t('badge.search'),
+              'aria-label': t('badge.search'),
+              onChange: (event) => { setBadgeQuery(event.target.value) },
+              onKeyDown: (event) => { event.stopPropagation() },
+            }),
+            badgeQuery === '' ? null : h('button', {
+              key: 'clear',
+              type: 'button',
+              className: 'wsg-badge-clear',
+              onClick: () => { setBadgeQuery('') },
+            }, t('badge.clear'))),
+          h('div', { key: 'colors', className: 'wsg-badge-colors' },
+            BADGE_COLORS.map(color => h('button', {
+              key: color.key,
+              type: 'button',
+              className: classes('wsg-badge-swatch', shape !== null && shape.color === color.key && 'wsg-badge-swatch-active'),
+              style: { background: color.ink },
+              title: t('badge.color.' + color.key),
+              'aria-label': t('badge.color.' + color.key),
+              'aria-pressed': shape !== null && shape.color === color.key,
+              onClick: () => {
+                onChange({ color: color.key, icon: shape === null ? DEFAULT_BADGE_ICON : shape.icon }, false)
+              },
+            }))),
+          h('div', { key: 'icons', className: 'wsg-badge-icons' },
+            hashVisible ? h('button', {
+              key: 'hash',
+              type: 'button',
+              className: classes('wsg-badge-icon-cell', shape === null && 'wsg-badge-icon-cell-active'),
+              title: t('badge.default'),
+              'aria-label': t('badge.default'),
+              'aria-pressed': shape === null,
+              onClick: () => { onChange(DEFAULT_BADGE, true) },
+            }, h('span', { key: 'glyph', className: 'wsg-badge-hash' }, '#')) : null,
+            icons.map(icon => h('button', {
+              key: icon.key,
+              type: 'button',
+              className: classes('wsg-badge-icon-cell', shape !== null && shape.icon === icon.key && 'wsg-badge-icon-cell-active'),
+              title: t('badge.icon.' + icon.key),
+              'aria-label': t('badge.icon.' + icon.key),
+              'aria-pressed': shape !== null && shape.icon === icon.key,
+              onClick: () => {
+                onChange({ color: shape === null ? DEFAULT_BADGE_COLOR : shape.color, icon: icon.key }, true)
+              },
+            }, strokeIcon(13, icon.shapes))),
+            icons.length === 0 && !hashVisible
+              ? h('div', { key: 'none', className: 'wsg-badge-empty' }, t('badge.none'))
+              : null),
+        )
+      }
 
       /** Workspace choices for the new-session picker, most recently used first. */
       const groupPickerChoices = () => {
@@ -1611,9 +1785,9 @@ window.__ModuleLoader__.load({
           const group = view.groups.find(candidate => candidate.id === popover.groupId)
           return popoverShell([
             h('div', { key: 'heading', className: 'wsg-menu-heading' }, t('group.badgeTitle')),
-            renderBadgeGrid(group?.badge ?? DEFAULT_BADGE, (badge) => {
+            renderBadgePicker(group?.badge ?? DEFAULT_BADGE, (badge, settled) => {
               patchGroup(popover.groupId, { badge: normalizeBadge(badge) })
-              closePopover()
+              if (settled) closePopover()
             }),
           ], PICKER_WIDTH)
         }
@@ -1649,7 +1823,7 @@ window.__ModuleLoader__.load({
             }),
             isCreate ? h('div', { key: 'badge-block' },
               h('div', { key: 'label', className: 'wsg-modal-label' }, t('group.badgeTitle')),
-              renderBadgeGrid(dialog.badge, (badge) => { patchDialog({ badge }) })) : null,
+              renderBadgePicker(dialog.badge, (badge) => { patchDialog({ badge: normalizeBadge(badge) }) })) : null,
             dialog.error === null ? null : h('div', { className: 'wsg-modal-error' }, dialog.error),
             h('div', { className: 'wsg-modal-actions' },
               h('button', { type: 'button', className: 'wsg-btn', onClick: () => { if (!dialog.busy) closeDialog() }, disabled: dialog.busy }, t('dialog.cancel')),
@@ -1756,8 +1930,9 @@ window.__ModuleLoader__.load({
           onDrop: (event) => { dropHead(account.key, event) },
           onDragEnd: endDrag,
         },
-        h('span', { key: 'badge', className: classes('wsg-badge', account.kind === 'project' && 'wsg-badge-project') },
-          account.kind === 'project' ? IconFolder(14) : (account.badge ?? DEFAULT_BADGE)),
+        account.kind === 'project'
+          ? h('span', { key: 'badge', className: classes('wsg-badge', 'wsg-badge-project') }, IconFolder(14))
+          : badgeNode(account.badge, 'wsg-badge', 13),
         h('span', { key: 'title', className: 'wsg-account-title' }, account.title),
         h('span', { key: 'chevron', className: classes('wsg-chevron', account.expanded && 'wsg-chevron-open') }, IconChevron()),
         h('span', { key: 'spacer', className: 'wsg-head-spacer' }),

@@ -26,14 +26,14 @@
 3. **只允许 `require('react')`**：Client 模块图按包名解析冻结模块，本包单文件打包；不能出现相对路径 require、动态 `import()` 或第三方依赖。
 4. **存储键与迁移**：`dsh.workspace-groups.v3`（外加 v2/v1 legacy 键）。改数据结构必须同步更新 `normalizeState` / `fromV2` / `fromV1`，并对损坏数据回退 `defaultState()`；否则老用户丢分组。
 5. **文案成对**：`STRINGS` 每条为 `[zh, en]`，两语言同键同序，`ZH` / `EN` 由它派生；`locale/*.json` 只放 meta。
-6. **样式只用主题 token**：颜色一律 `--dsw-*` 变量，类名 `wsg-` 前缀；唯一字面色是遮罩渐变的 `#000` / `#0000`。
+6. **样式只用主题 token**：颜色一律 `--dsw-*` 变量，类名 `wsg-` 前缀；字面色只有两处——遮罩渐变的 `#000` / `#0000`，以及 `BADGE_COLORS` 里用户可选的徽章调色板（只能加在表里，不能散落到 CSS）。
 7. **激活失败必须兜底**：`apply()` 的 try/catch 只打 `workspace-groups: activation failed…`，让侧栏回落内置浏览器，不允许带崩整页 boot。
 8. **不用 `onMouseEnter`**：宿主在捕获阶段拦 `mouseover`，行内 hover 一律 `onPointerEnter` / `onPointerLeave`；布局换位靠 `data-*` 属性 + CSS（例如 hover 时时间与归档按钮共享同一个 grid 单元格）。
 9. **包名固定**：`@local/dsh-workspace-groups` 出现在 `package.json`、`cordis.patch.yml`、`client.js` 的 `id` 三处；改名要同步改 profile 依赖与 `dsh.profile.bundles`，否则装不上。
 
 ## client.js 代码地图（按文件顺序）
 
-- **常量与字符串**：`NS`、`STORAGE_KEY`、`TABS`、`ORDERS`、`STRINGS` / `ZH` / `EN`、`BADGE_CHOICES`、浮层尺寸（`MENU_WIDTH`、`FLYOUT_*`）、`CSS`。
+- **常量与字符串**：`NS`、`STORAGE_KEY`、`TABS`、`ORDERS`、`STRINGS` / `ZH` / `EN`、`BADGE_COLORS` / `BADGE_ICONS`（徽章调色板与图标表，zh/en 名称自动进字典）、浮层尺寸（`MENU_WIDTH`、`FLYOUT_*`）、`CSS`。
 - **图标**：`svgIcon` / `strokeIcon` / `glyphIcon`，统一 16px 视框，字形取自宿主。
 - **持久化**：`defaultState` → `pick` / `normalizeBadge` / `mapRecord` / `orderArray` → `normalizeState` → `loadState`（含 v2/v1 迁移与 try/catch）→ `persistState`。
 - **派生**：`sessionEligible` / `sessionVisible`（归档与当前会话）、`pinRanks` / `recencyOrder` / `partitioned` / `accountOrder`（置顶与排序）、`buildModel`（单趟分桶出「未分组 + 各分组 + 各项目」）。
@@ -53,6 +53,7 @@
 |---|---|
 | 新增 / 修改界面文案 | `STRINGS`（同时给 zh/en）；`locale/*.json` 只在改插件页说明时动 |
 | 新增图标 | `strokeIcon`（描边）或 `glyphIcon`（填充），保持 16px 视框 |
+| 徽章配色 / 图标 | `BADGE_COLORS` / `BADGE_ICONS`（`ink`+`wash`、`shapes`、zh/en 名称自动进字典） |
 | 持久化字段 | `defaultState` + `normalizeState`（含迁移），并走 `usePersistedView` 的写入口 |
 | 右键菜单项 | 菜单构造处用 `menuItem` / `menuHeading` / `menuSeparator`，动作落到 mutator 或 `settle(injected.*)` |
 | 对话框 | `DIALOG_SPEC` 加一条：`local` 用本地面板 mutator，`remote` 用注入方法，说明文案放 `desc` |
@@ -75,7 +76,7 @@
 - [ ] 溢出标题 hover 横向滚动到末尾、两侧渐隐；移开复位并恢复省略号；系统「减少动态效果」时直接跳末尾。
 - [ ] 六种拖拽：跨组归组并插入、同组排序、拖到「未分组」=移出、拖到空组虚线框=归组、组头调整顺序、项目页签仅同项目内排序。
 - [ ] 右键三类对象（会话行 / 组头 / 项目头）菜单项齐全且动作正确；对话框提交与删除生效。
-- [ ] 徽章选择、置顶会话排最前、最近更新 / 手动排序切换。
+- [ ] 徽章：选色 → 选图标立即生效，搜索过滤、清除、`#` 默认项、旧 emoji 徽章回显都正常；置顶会话排最前、最近更新 / 手动排序切换。
 - [ ] 刷新后页签、顺序、折叠、分组与归属不变；v2/v1 旧数据迁移正确；写坏 JSON 时回退默认值。
 - [ ] 新建会话：分组 `⊕` 先选工作区（按该工作区最近会话倒序），项目 `⊕` 直接创建。
 
