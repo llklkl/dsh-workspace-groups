@@ -1,0 +1,5 @@
+# Bundle patch: inserts the row whose Client half replaces the sidebar
+# workspace region's presentation and adds the grouped view.
+- insert:
+    - id: workspace-groups
+      name: '@local/dsh-workspace-groups'
