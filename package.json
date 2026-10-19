@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-workspace-groups",
-  "version": "3.1.5",
+  "version": "3.2.0",
   "private": true,
   "description": "Replaces the sidebar workspace browser with a grouped session view: groups/projects tabs, emoji badges, drag ordering, local search.",
   "type": "module",

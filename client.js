@@ -17,7 +17,9 @@ window.__ModuleLoader__.load({
   id: '@local/dsh-workspace-groups',
   factory(require) {
     const React = require('react')
-    const h = React.createElement
+    const {
+      Fragment, createElement: h, memo, useCallback, useEffect, useMemo, useRef, useState,
+    } = React
 
     const NS = 'workspace-groups'
     const STORAGE_KEY = 'dsh.workspace-groups.v3'
@@ -47,6 +49,15 @@ window.__ModuleLoader__.load({
     const TITLE_MARQUEE_TARGET_MS = 2400
     const TABS = ['groups', 'projects']
     const ORDERS = ['updated', 'manual']
+    /** Popover/flyout geometry: gap from its anchor, and the viewport it must stay inside. */
+    const FLYOUT_GAP = 4
+    const FLYOUT_MARGIN = 12
+    const FLYOUT_TOP_MARGIN = 8
+    const FLYOUT_MIN_HEIGHT = 120
+    /** Stable empties: a fresh `{}`/`[]` per render would defeat every memo below. */
+    const EMPTY_RECORD = Object.freeze({})
+    const EMPTY_IDS = Object.freeze([])
+    const EMPTY_ITEMS = Object.freeze([])
 
     /** All copy in one table: `[zh, en]` per key, so the two languages cannot drift. */
     const STRINGS = {
@@ -223,10 +234,27 @@ window.__ModuleLoader__.load({
 .wsg-error-text{flex:1;min-width:0;overflow-wrap:anywhere}
 `
 
+    // ---- shared DOM helpers ---------------------------------------------------
+
+    /** Join class names, dropping everything falsy. */
+    function classes(...names) {
+      return names.filter(Boolean).join(' ')
+    }
+
+    /** Whether a parsed value is a plain record (arrays do not count). */
+    function isRecord(value) {
+      return value !== null && typeof value === 'object' && !Array.isArray(value)
+    }
+
     // ---- icons (hand-drawn: this plugin never imports the UI primitives) -----
 
-    /** Stroke icon from path strings or `{cx,cy,r}` circles. */
-    function strokeIcon(size, shapes) {
+    /**
+     * The 16px svg shell every icon shares.
+     * @param size - rendered square size in px.
+     * @param strokeWidth - `1.4` for the hand-drawn set, `1.1` for the host glyphs.
+     * @param children - shape elements.
+     */
+    function svgIcon(size, strokeWidth, children) {
       return h(
         'svg',
         {
@@ -235,16 +263,21 @@ window.__ModuleLoader__.load({
           height: size,
           fill: 'none',
           stroke: 'currentColor',
-          strokeWidth: 1.4,
+          strokeWidth,
           strokeLinecap: 'round',
           strokeLinejoin: 'round',
           'aria-hidden': true,
           focusable: false,
         },
-        shapes.map((shape, index) => (typeof shape === 'string'
-          ? h('path', { key: index, d: shape })
-          : h('circle', { key: index, ...shape }))),
+        children,
       )
+    }
+
+    /** Stroke icon from path strings or `{cx,cy,r}` circles. */
+    function strokeIcon(size, shapes) {
+      return svgIcon(size, 1.4, shapes.map((shape, index) => (typeof shape === 'string'
+        ? h('path', { key: index, d: shape })
+        : h('circle', { key: index, ...shape }))))
     }
 
     /**
@@ -255,24 +288,9 @@ window.__ModuleLoader__.load({
      * @returns the svg element.
      */
     function glyphIcon(size, paths) {
-      return h(
-        'svg',
-        {
-          viewBox: '0 0 16 16',
-          width: size,
-          height: size,
-          fill: 'none',
-          stroke: 'currentColor',
-          strokeWidth: 1.1,
-          strokeLinecap: 'round',
-          strokeLinejoin: 'round',
-          'aria-hidden': true,
-          focusable: false,
-        },
-        paths.map((path, index) => (path.fill === true
-          ? h('path', { key: index, d: path.d, fill: 'currentColor', stroke: 'none' })
-          : h('path', { key: index, d: path.d, stroke: 'currentColor' }))),
-      )
+      return svgIcon(size, 1.1, paths.map((path, index) => (path.fill === true
+        ? h('path', { key: index, d: path.d, fill: 'currentColor', stroke: 'none' })
+        : h('path', { key: index, d: path.d, stroke: 'currentColor' }))))
     }
 
     /** The shipped workspace browser's folder glyph (IconFolderCloseRegular). */
@@ -341,7 +359,7 @@ window.__ModuleLoader__.load({
     /** Copy the entries of a raw record that `keep` accepts; `undefined` drops one. */
     function mapRecord(raw, keep) {
       const out = {}
-      if (raw === null || typeof raw !== 'object') return out
+      if (!isRecord(raw)) return out
       for (const [key, value] of Object.entries(raw)) {
         const mapped = keep(value, key)
         if (mapped !== undefined) out[key] = mapped
@@ -358,10 +376,10 @@ window.__ModuleLoader__.load({
 
     /** Normalize one complete state record; every malformed member falls back. */
     function normalizeState(raw) {
-      if (raw === null || typeof raw !== 'object') return defaultState()
+      if (!isRecord(raw)) return defaultState()
       const seen = new Set()
       const groups = (Array.isArray(raw.groups) ? raw.groups : []).flatMap((group) => {
-        if (group === null || typeof group !== 'object') return []
+        if (!isRecord(group)) return []
         if (typeof group.id !== 'string' || typeof group.name !== 'string' || group.id === '' || group.name === '') return []
         if (seen.has(group.id)) return []
         seen.add(group.id)
@@ -380,32 +398,35 @@ window.__ModuleLoader__.load({
 
     /** The v2 record's account keys predate the projects tab. */
     function fromV2(raw) {
-      if (raw === null || typeof raw !== 'object') return null
+      if (!isRecord(raw)) return null
+      const order = isRecord(raw.sessionOrder) ? raw.sessionOrder : EMPTY_RECORD
       return {
         ...raw,
         tab: raw.groupBy === 'custom' ? 'groups' : 'projects',
-        sessionOrder: Object.fromEntries(Object.entries(raw.sessionOrder ?? {})
+        sessionOrder: Object.fromEntries(Object.entries(order)
           .filter(([key]) => key !== '__flat__')
-          .map(([key, order]) => [key === UNGROUPED_KEY || key.startsWith(GROUP_PREFIX) ? key : PROJECT_PREFIX + key, order])),
+          .map(([key, value]) => [key === UNGROUPED_KEY || key.startsWith(GROUP_PREFIX) ? key : PROJECT_PREFIX + key, value])),
       }
+    }
+
+    /** Map one v1 account key onto the v3 spelling. */
+    function fromV1Key(key) {
+      if (key === '__ungrouped__') return UNGROUPED_KEY
+      return key.startsWith('ws:') ? PROJECT_PREFIX + key.slice(3) : key
     }
 
     /** The v1 record stored collapsed keys instead of expansion flags. */
     function fromV1(raw) {
-      if (raw === null || typeof raw !== 'object') return null
+      if (!isRecord(raw)) return null
+      const collapsed = isRecord(raw.collapsed) ? raw.collapsed : EMPTY_RECORD
       return {
         ...raw,
         tab: raw.view === 'groups' ? 'groups' : 'projects',
         orderBy: 'updated',
         sessionOrder: {},
-        groupExpansion: Object.fromEntries(Object.entries(raw.collapsed ?? {})
+        groupExpansion: Object.fromEntries(Object.entries(collapsed)
           .filter(([key, value]) => key !== 'archived' && typeof value === 'boolean')
-          .map(([key, value]) => [
-            (key.startsWith('ws:') ? PROJECT_PREFIX + key.slice(3) : key) === '__ungrouped__'
-              ? UNGROUPED_KEY
-              : (key.startsWith('ws:') ? PROJECT_PREFIX + key.slice(3) : key),
-            value,
-          ])),
+          .map(([key, value]) => [fromV1Key(key), value])),
       }
     }
 
@@ -456,20 +477,17 @@ window.__ModuleLoader__.load({
 
     // ---- derivations -------------------------------------------------------
 
-    /** Whether one catalog row may render as a row (archived rows never render). */
-    function sessionVisible(summary, currentId, archived) {
-      if (summary === undefined || summary === null) return false
-      if (summary.origin === 'subagent') return false
-      if (summary.blank === true && summary.id !== currentId) return false
-      return !archived.has(summary.id)
-    }
-
     /** Whether one catalog row may belong to an account at all. */
     function sessionEligible(summary, currentId) {
       if (summary === undefined || summary === null) return false
       if (summary.origin === 'subagent') return false
       if (summary.blank === true && summary.id !== currentId) return false
       return true
+    }
+
+    /** Whether one catalog row may render as a row (archived rows never render). */
+    function sessionVisible(summary, currentId, archived) {
+      return sessionEligible(summary, currentId) && !archived.has(summary.id)
     }
 
     /** Rank map for the registry-global pin set, most recently pinned first. */
@@ -535,7 +553,7 @@ window.__ModuleLoader__.load({
       const {
         tab, workspaces, ids, byId, currentId, archived,
         groups, assignment, sessionOrder, ranks, groupExpansion, filter,
-        forceExpanded, hideEmpty, showEmptyBucket, t,
+        forceExpanded, hideEmpty, showEmptyBucket, ungroupedTitle,
       } = options
       const eligible = ids.filter(id => sessionEligible(byId[id], currentId))
       const makeAccount = (key, title, kind, extra) => {
@@ -563,12 +581,26 @@ window.__ModuleLoader__.load({
             'project',
             {
               workspaceId: workspace.workspaceId,
-              members: (workspace.sessionIds ?? []).filter(id => byId[id] !== undefined),
+              members: (workspace.sessionIds ?? EMPTY_IDS).filter(id => byId[id] !== undefined),
             },
           ))
           .filter(account => hideEmpty !== true || account.sessions.length > 0)
       }
+      // One pass over the catalog files every eligible session under its group,
+      // instead of one filtering pass per group.
       const known = new Set(groups.map(group => group.id))
+      const buckets = new Map()
+      const loose = []
+      for (const id of eligible) {
+        const owner = assignment[id]
+        if (!known.has(owner)) {
+          loose.push(id)
+          continue
+        }
+        const bucket = buckets.get(owner)
+        if (bucket === undefined) buckets.set(owner, [id])
+        else bucket.push(id)
+      }
       const accounts = groups.map(group => makeAccount(
         GROUP_PREFIX + group.id,
         group.name,
@@ -576,12 +608,11 @@ window.__ModuleLoader__.load({
         {
           groupId: group.id,
           badge: group.badge,
-          members: eligible.filter(id => assignment[id] === group.id),
+          members: buckets.get(group.id) ?? EMPTY_IDS,
         },
       ))
-      const loose = eligible.filter(id => !known.has(assignment[id]))
       if (loose.length > 0) {
-        const bucket = makeAccount(UNGROUPED_KEY, t('account.ungrouped'), 'group', { members: loose })
+        const bucket = makeAccount(UNGROUPED_KEY, ungroupedTitle, 'group', { members: loose })
         // The bucket is a drop target while a session drag is live; otherwise an
         // empty one is just noise and stays hidden.
         if (bucket.sessions.length > 0 || showEmptyBucket === true) accounts.push(bucket)
@@ -650,14 +681,52 @@ window.__ModuleLoader__.load({
       return when.getFullYear() + '-' + String(when.getMonth() + 1).padStart(2, '0') + '-' + String(when.getDate()).padStart(2, '0')
     }
 
-    /** Clamp a popover origin into the viewport. */
-    function clampX(x, width) {
-      return Math.max(8, Math.min(x, window.innerWidth - (width ?? MENU_WIDTH) - 12))
+    /**
+     * One row's relative timestamp, memoized per (timestamp, wall-clock minute,
+     * locale). Rows re-render on every store notification; formatting the same
+     * minute again for hundreds of rows was pure repetition.
+     * @param t - translate seat, part of the cache identity.
+     * @param timestamp - the session's `updatedAt`.
+     * @param now - this render's wall clock.
+     * @returns the row's compact label.
+     */
+    let labelCache = { t: null, minute: -1, labels: new Map() }
+    function relativeLabel(t, timestamp, now) {
+      const minute = Math.floor(now / 60_000)
+      if (labelCache.t !== t || labelCache.minute !== minute) {
+        labelCache = { t, minute, labels: new Map() }
+      }
+      const key = typeof timestamp === 'number' ? timestamp : 0
+      const cached = labelCache.labels.get(key)
+      if (cached !== undefined) return cached
+      const label = formatRelative(t, timestamp, now)
+      labelCache.labels.set(key, label)
+      return label
     }
 
-    /** Clamp a popover origin into the viewport. */
-    function clampY(y) {
-      return Math.min(y, window.innerHeight - 48)
+    /**
+     * Clamp a flyout origin into the viewport.
+     * @param x - desired left edge.
+     * @param y - desired top edge.
+     * @param width - flyout width, so its right edge stays reachable.
+     * @returns `{x, y}` inside the viewport.
+     */
+    function originAt(x, y, width) {
+      return {
+        x: Math.max(FLYOUT_TOP_MARGIN, Math.min(x, window.innerWidth - width - FLYOUT_MARGIN)),
+        y: Math.max(FLYOUT_TOP_MARGIN, Math.min(y, window.innerHeight - 48)),
+      }
+    }
+
+    /**
+     * Origin just under an element's top/bottom edge.
+     * @param box - the anchor's rect.
+     * @param width - flyout width.
+     * @param offset - horizontal nudge from the anchor's left edge.
+     * @returns `{x, y}` inside the viewport.
+     */
+    function originUnder(box, width, offset) {
+      return originAt(box.left + offset, box.bottom + FLYOUT_GAP, width)
     }
 
     // ---- drag target helpers -------------------------------------------------
@@ -678,33 +747,37 @@ window.__ModuleLoader__.load({
       return dragState.accountKey === accountKey || tab === 'groups'
     }
 
-    /** Whether the drag marker already points at this row half. */
-    function sameRowTarget(over, accountKey, sessionId, half) {
-      return over !== undefined && over !== null && over.head !== true
-        && over.accountKey === accountKey && over.sessionId === sessionId && over.half === half
+    /** Which half of a drop target the pointer sits over. */
+    function dropHalf(box, clientY) {
+      return clientY < box.top + box.height / 2 ? 'before' : 'after'
     }
 
-    /** Whether the drag marker already points at this account head. */
-    function sameHeadTarget(over, accountKey) {
-      return over !== undefined && over !== null && over.head === true && over.accountKey === accountKey
-    }
-
-    /** Whether a group drag already points at this group half. */
-    function sameHeadMarker(over, groupId, half) {
-      return over !== undefined && over !== null && over.groupId === groupId && over.half === half
-    }
-
-    /** Whether this row is the current drag target. */
-    function rowMarker(over, accountKey, sessionId) {
-      if (over === undefined || over === null || over.head === true) return ''
+    /** Whether `over` points at this row, and on which half; `''` when it does not. */
+    function rowOver(over, accountKey, sessionId) {
+      if (over === null || over === undefined || over.head === true) return ''
       if (over.accountKey !== accountKey || over.sessionId !== sessionId) return ''
       return over.half === 'before' ? 'before' : 'after'
     }
 
-    /** Whether this group head is the current group-drag target. */
-    function headMarker(over, groupId) {
-      if (over === undefined || over === null || over.groupId !== groupId) return ''
+    /** Whether `over` points at this account head (a session drag). */
+    function isHeadOver(over, accountKey) {
+      return over !== null && over !== undefined && over.head === true && over.accountKey === accountKey
+    }
+
+    /** Whether a group drag points at this group, and on which half; `''` when it does not. */
+    function groupOver(over, groupId) {
+      if (over === null || over === undefined || over.groupId !== groupId) return ''
       return over.half === 'before' ? 'before' : 'after'
+    }
+
+    /** Whether a drag marker already equals the candidate marker. */
+    function sameMarker(over, next) {
+      if (over === null || over === undefined) return false
+      return over.accountKey === next.accountKey
+        && over.sessionId === next.sessionId
+        && over.groupId === next.groupId
+        && over.head === next.head
+        && over.half === next.half
     }
 
     /** Where a drop lands inside `order`; `-1` when the anchor row is gone. */
@@ -727,10 +800,15 @@ window.__ModuleLoader__.load({
 
     // ---- title marquee -------------------------------------------------------
 
-    /** Place the title's scroll offset and publish the fade-mask hooks. */
-    function placeTitle(title, left, range) {
+    /** Scroll the title without smooth behavior: the crawl owns every step. */
+    function scrollTitleTo(title, left) {
       if (typeof title.scrollTo === 'function') title.scrollTo({ left, behavior: 'instant' })
       else title.scrollLeft = left
+    }
+
+    /** Place the title's scroll offset and publish the fade-mask hooks. */
+    function placeTitle(title, left, range) {
+      scrollTitleTo(title, left)
       if (left > 0) title.dataset.scrolled = ''
       else delete title.dataset.scrolled
       if (left < range) title.dataset.clipped = ''
@@ -739,8 +817,7 @@ window.__ModuleLoader__.load({
 
     /** Return the title to its resting state: scroll at the start, masks off. */
     function restTitle(title) {
-      if (typeof title.scrollTo === 'function') title.scrollTo({ left: 0, behavior: 'instant' })
-      else title.scrollLeft = 0
+      scrollTitleTo(title, 0)
       delete title.dataset.scrolled
       delete title.dataset.clipped
     }
@@ -748,21 +825,21 @@ window.__ModuleLoader__.load({
     // ---- row component -------------------------------------------------------
 
     /** One dense session row; memoized because the sidebar can carry hundreds of them. */
-    const SessionRow = React.memo(function SessionRow(props) {
+    const SessionRow = memo(function SessionRow(props) {
       const {
         sessionId, accountKey, title, tooltip, timeLabel, statusState, statusLabel,
         pinned, current, marker, draggable, archiveLabel,
         onOpen, onContextMenu, onDragStart, onDragOver, onDrop, onDragEnd, onArchive,
       } = props
-      const titleRef = React.useRef(null)
-      const frameRef = React.useRef(0)
+      const titleRef = useRef(null)
+      const frameRef = useRef(0)
       // Absolute spinner phase: the delay is derived from the wall clock, so every
       // running row rotates in lockstep regardless of when it mounted.
-      const spinDelay = React.useMemo(
+      const spinDelay = useMemo(
         () => (statusState === 'ongoing' ? `-${Date.now() % SPIN_MS}ms` : undefined),
         [statusState],
       )
-      React.useEffect(() => () => cancelAnimationFrame(frameRef.current), [])
+      useEffect(() => () => cancelAnimationFrame(frameRef.current), [])
       /** Crawl a clipped title while the row is hovered, at a length-aware speed. */
       const startTitleMarquee = () => {
         const element = titleRef.current
@@ -799,10 +876,12 @@ window.__ModuleLoader__.load({
         delete element.dataset.marquee
         restTitle(element)
       }
-      const className = 'wsg-session'
-        + (current ? ' wsg-session-current' : '')
-        + (marker === 'before' ? ' wsg-drop-before' : '')
-        + (marker === 'after' ? ' wsg-drop-after' : '')
+      const className = classes(
+        'wsg-session',
+        current && 'wsg-session-current',
+        marker === 'before' && 'wsg-drop-before',
+        marker === 'after' && 'wsg-drop-after',
+      )
       return h(
         'div',
         {
@@ -858,41 +937,36 @@ window.__ModuleLoader__.load({
 
     // ---- the panel -----------------------------------------------------------
 
-    /** Dialog affordances, keyed by kind: only the differences live here. */
+    /**
+     * Dialog affordances, keyed by kind: only the differences live here.
+     * `local` submits against the viewing state, `remote` calls one injected method.
+     */
     const DIALOG_SPEC = {
-      createGroup: { title: 'group.create', confirm: 'dialog.create' },
-      renameGroup: { title: 'group.rename', confirm: 'dialog.save' },
-      renameWorkspace: { title: 'workspace.rename', confirm: 'dialog.save' },
-      renameSession: { title: 'session.rename', confirm: 'dialog.save' },
-      deleteGroup: { title: 'group.delete', desc: 'group.deleteDesc', confirm: 'dialog.delete', danger: true },
-      deleteWorkspace: { title: 'workspace.delete', desc: 'workspace.deleteDesc', confirm: 'dialog.delete', danger: true },
+      createGroup: { title: 'group.create', confirm: 'dialog.create', local: 'createGroup' },
+      renameGroup: { title: 'group.rename', confirm: 'dialog.save', local: 'renameGroup' },
+      deleteGroup: { title: 'group.delete', desc: 'group.deleteDesc', confirm: 'dialog.delete', danger: true, local: 'deleteGroup' },
+      renameWorkspace: { title: 'workspace.rename', confirm: 'dialog.save', remote: 'renameWorkspace' },
+      renameSession: { title: 'session.rename', confirm: 'dialog.save', remote: 'renameSession' },
+      deleteWorkspace: { title: 'workspace.delete', desc: 'workspace.deleteDesc', confirm: 'dialog.delete', danger: true, remote: 'deleteWorkspace' },
     }
 
-    /** The grouped view that replaces the sidebar's workspace browser. */
-    function GroupedWorkspacePanel(props) {
-      const { useSessions, useSessionStatus, useWorkspaces, t } = props
-      const list = useSessions(state => state)
-      const statuses = useSessionStatus(state => state)
-      const snapshot = useWorkspaces(state => state)
+    /** Menu entry vocabulary: one flat record per row, rendered by `renderMenuEntry`. */
+    const menuItem = (key, label, action, extra) => ({ key, label, action, ...extra })
+    const menuHeading = (key, label) => ({ key, heading: label })
+    const menuSeparator = key => ({ key, separator: true })
 
-      // ---- state -------------------------------------------------------------
-      const [view, setView] = React.useState(loadState)
-      const viewRef = React.useRef(view)
+    // ---- panel hooks ---------------------------------------------------------
+
+    /**
+     * The persisted viewing state and its single write funnel.
+     * @returns the state, its ref (for callbacks), and the commit function.
+     */
+    function usePersistedView() {
+      const [view, setView] = useState(loadState)
+      const viewRef = useRef(view)
       viewRef.current = view
-      const [popover, setPopover] = React.useState(null)
-      const [dialog, setDialog] = React.useState(null)
-      const [error, setError] = React.useState(null)
-      const [search, setSearch] = React.useState('')
-      const [searchOpen, setSearchOpen] = React.useState(false)
-      const [drag, setDrag] = React.useState(null)
-      const dragRef = React.useRef(drag)
-      dragRef.current = drag
-      const popoverRef = React.useRef(null)
-      const dropCommittedRef = React.useRef(false)
-      const orderedRef = React.useRef(new Map())
-
       /** Commit one persisted view change; the write happens before any navigation. */
-      const updateView = React.useCallback((updater) => {
+      const updateView = useCallback((updater) => {
         const previous = viewRef.current
         const next = updater(previous)
         if (next === previous) return
@@ -900,76 +974,122 @@ window.__ModuleLoader__.load({
         persistState(next)
         setView(next)
       }, [])
+      // Make a migrated record durable on the first mount.
+      useEffect(() => { persistState(viewRef.current) }, [])
+      return { view, viewRef, updateView }
+    }
 
-      const closePopover = React.useCallback(() => { setPopover(null) }, [])
-      const closeDialog = React.useCallback(() => { setDialog(null) }, [])
-      const patchDialog = React.useCallback((patch) => {
-        setDialog(previous => (previous === null ? previous : { ...previous, ...patch }))
-      }, [])
-      const openDialog = React.useCallback((kind, fields) => {
-        setPopover(null)
-        setDialog({ kind, value: '', badge: DEFAULT_BADGE, error: null, busy: false, ...fields })
-      }, [])
-
-      // ---- effects -----------------------------------------------------------
-      const popoverOpen = popover !== null
-      React.useEffect(() => {
-        if (!popoverOpen) return undefined
-        const dismiss = () => { setPopover(null) }
+    /**
+     * One document listener serves both layers: a mousedown outside a popover
+     * dismisses it, Escape closes the dialog and any popover under it.
+     * @param options - open flags, the popover ref, and the two close handlers.
+     */
+    function useLayerDismissal(options) {
+      const { popoverOpen, dialogOpen, popoverRef, onClosePopover, onCloseDialog } = options
+      useEffect(() => {
+        if (!popoverOpen && !dialogOpen) return undefined
         const onPress = (event) => {
-          if (!(event.target instanceof Node)) return
+          if (!popoverOpen || !(event.target instanceof Node)) return
           if (popoverRef.current !== null && popoverRef.current.contains(event.target)) return
-          dismiss()
+          onClosePopover()
         }
-        const onKey = (event) => { if (event.key === 'Escape') dismiss() }
+        const onKey = (event) => {
+          if (event.key !== 'Escape') return
+          if (dialogOpen) onCloseDialog()
+          onClosePopover()
+        }
         document.addEventListener('mousedown', onPress)
         document.addEventListener('keydown', onKey)
         return () => {
           document.removeEventListener('mousedown', onPress)
           document.removeEventListener('keydown', onKey)
         }
-      }, [popoverOpen])
+      }, [popoverOpen, dialogOpen, popoverRef, onClosePopover, onCloseDialog])
+    }
 
-      // Make a migrated record durable on the first mount.
-      React.useEffect(() => { persistState(viewRef.current) }, [])
-
-      // One Escape handler serves both layers; a dialog replaces any popover.
-      const dialogOpen = dialog !== null
-      React.useEffect(() => {
-        if (!dialogOpen) return undefined
-        const onKey = (event) => {
-          if (event.key !== 'Escape') return
-          setDialog(null)
-          setPopover(null)
-        }
-        document.addEventListener('keydown', onKey)
-        return () => { document.removeEventListener('keydown', onKey) }
-      }, [dialogOpen])
-
-      const dragging = drag !== null
-      React.useEffect(() => {
-        if (!dragging) return undefined
+    /**
+     * While a drag is live, a drag-over/drop the rows miss must still accept the
+     * gesture, or the browser rejects the drop on the whole panel.
+     * @param active - whether a drag is in flight.
+     */
+    function useDocumentDragAccept(active) {
+      useEffect(() => {
+        if (!active) return undefined
         const acceptDrag = (event) => {
           event.preventDefault()
           if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'move'
         }
-        const acceptDrop = (event) => { event.preventDefault() }
+        const onDrop = (event) => { event.preventDefault() }
         document.addEventListener('dragover', acceptDrag)
-        document.addEventListener('drop', acceptDrop)
+        document.addEventListener('drop', onDrop)
         return () => {
           document.removeEventListener('dragover', acceptDrag)
-          document.removeEventListener('drop', acceptDrop)
+          document.removeEventListener('drop', onDrop)
         }
-      }, [dragging])
+      }, [active])
+    }
+
+    /** The grouped view that replaces the sidebar's workspace browser. */
+    function GroupedWorkspacePanel(props) {
+      const { useSessions, useSessionStatus, useWorkspaces, t } = props
+      // Fine-grained slices: an unrelated store update keeps these references, so
+      // every memo below stays valid instead of rebuilding on each notification.
+      const ids = useSessions(state => state?.ids ?? EMPTY_IDS)
+      const byId = useSessions(state => state?.byId ?? EMPTY_RECORD)
+      const phase = useSessions(state => state?.phase)
+      const statuses = useSessionStatus(state => state)
+      const items = useWorkspaces(state => state?.items ?? EMPTY_ITEMS)
+      const archivedIds = useWorkspaces(state => state?.archivedSessionIds ?? EMPTY_IDS)
+      const pinnedIds = useWorkspaces(state => state?.pinnedSessionIds ?? EMPTY_IDS)
+
+      // ---- state -------------------------------------------------------------
+      const { view, viewRef, updateView } = usePersistedView()
+      const [popover, setPopover] = useState(null)
+      const [dialog, setDialog] = useState(null)
+      const [error, setError] = useState(null)
+      const [search, setSearch] = useState('')
+      const [searchOpen, setSearchOpen] = useState(false)
+      const [drag, setDrag] = useState(null)
+      const dragRef = useRef(drag)
+      dragRef.current = drag
+      const popoverRef = useRef(null)
+      const dropCommittedRef = useRef(false)
+      const orderedRef = useRef(new Map())
+      // Row elements are pure functions of their primitive props: a store update
+      // touches one row, so reusing the released element lets React bail out of
+      // the other subtrees instead of comparing every prop again.
+      const rowCacheRef = useRef(new Map())
+      const visibleRowsRef = useRef(new Set())
+      // A reused row element must never outlive the callbacks it captured.
+      const handlerSetRef = useRef([])
+      const handlerVersionRef = useRef(0)
+
+      const closePopover = useCallback(() => { setPopover(null) }, [])
+      const closeDialog = useCallback(() => { setDialog(null) }, [])
+      const patchDialog = useCallback((patch) => {
+        setDialog(previous => (previous === null ? previous : { ...previous, ...patch }))
+      }, [])
+      const openDialog = useCallback((kind, fields) => {
+        setPopover(null)
+        setDialog({ kind, value: '', badge: DEFAULT_BADGE, error: null, busy: false, ...fields })
+      }, [])
+
+      // ---- layers -------------------------------------------------------------
+      useLayerDismissal({
+        popoverOpen: popover !== null,
+        dialogOpen: dialog !== null,
+        popoverRef,
+        onClosePopover: closePopover,
+        onCloseDialog: closeDialog,
+      })
+      useDocumentDragAccept(drag !== null)
 
       // ---- derived data -----------------------------------------------------
       const now = Date.now()
-      const byId = list?.byId ?? {}
-      const ids = list?.ids ?? []
-      const workspaces = snapshot?.items ?? []
-      const archived = React.useMemo(() => new Set(snapshot?.archivedSessionIds ?? []), [snapshot])
-      const ranks = React.useMemo(() => pinRanks(snapshot?.pinnedSessionIds ?? []), [snapshot])
-      const workspaceTitleBySession = React.useMemo(() => {
+      const workspaces = items
+      const archived = useMemo(() => new Set(archivedIds), [archivedIds])
+      const ranks = useMemo(() => pinRanks(pinnedIds), [pinnedIds])
+      const workspaceTitleBySession = useMemo(() => {
         const titles = new Map()
         for (const workspace of workspaces) {
           for (const sessionId of workspace.sessionIds ?? []) {
@@ -979,7 +1099,7 @@ window.__ModuleLoader__.load({
         return titles
       }, [workspaces])
 
-      const currentId = React.useMemo(() => {
+      const currentId = useMemo(() => {
         for (const id of ids) {
           const summary = byId[id]
           if (summary !== undefined && (summary.retainedBy?.mainView ?? 0) > 0) return id
@@ -990,28 +1110,32 @@ window.__ModuleLoader__.load({
       const sessionDragging = isSessionDrag(drag)
       const trimmedSearch = search.trim()
       const searching = trimmedSearch !== ''
-      const searchIndex = React.useMemo(() => {
+      // The index only exists while a search is open: building it on every store
+      // update when nobody searches was pure waste.
+      const blankTitle = t('session.new')
+      const searchIndex = useMemo(() => {
+        if (!searching) return null
         const index = new Map()
         for (const id of ids) {
           const summary = byId[id]
           if (summary === undefined) continue
-          const title = summary.blank === true ? t('session.new') : (summary.displayTitle ?? '')
+          const title = summary.blank === true ? blankTitle : (summary.displayTitle ?? '')
           index.set(id, (title + '\n' + (workspaceTitleBySession.get(id) ?? '')).toLocaleLowerCase())
         }
         return index
-      }, [ids, byId, workspaceTitleBySession, t])
+      }, [searching, ids, byId, workspaceTitleBySession, blankTitle])
 
-      const matchSet = React.useMemo(() => {
-        if (!searching) return null
+      const matchSet = useMemo(() => {
+        if (searchIndex === null) return null
         const needle = trimmedSearch.toLocaleLowerCase()
         const matches = new Set()
         for (const [id, haystack] of searchIndex) {
           if (haystack.includes(needle)) matches.add(id)
         }
         return matches
-      }, [searching, trimmedSearch, searchIndex])
+      }, [trimmedSearch, searchIndex])
 
-      const model = React.useMemo(() => buildModel({
+      const model = useMemo(() => buildModel({
         tab: view.tab,
         workspaces,
         ids,
@@ -1027,54 +1151,37 @@ window.__ModuleLoader__.load({
         forceExpanded: searching,
         hideEmpty: searching,
         showEmptyBucket: sessionDragging,
-        t,
+        ungroupedTitle: t('account.ungrouped'),
       }), [
         view.tab, view.groups, view.assignment, view.sessionOrder, view.groupExpansion,
         workspaces, ids, byId, currentId, archived, ranks, matchSet, searching, sessionDragging, t,
       ])
 
-      const orderedByKey = React.useMemo(
+      const orderedByKey = useMemo(
         () => new Map(model.map(account => [account.key, account.ordered])),
         [model],
       )
       orderedRef.current = orderedByKey
+      // Row-level constants: one translate seat lookup serves every row.
+      const archiveLabel = t('session.archive')
 
-      const workspaceChoices = React.useMemo(() => {
-        const recent = new Map()
-        for (const workspace of workspaces) {
-          let latest = 0
-          for (const id of workspace.sessionIds ?? []) {
-            const updatedAt = byId[id]?.updatedAt ?? 0
-            if (updatedAt > latest) latest = updatedAt
-          }
-          recent.set(workspace.workspaceId, latest)
-        }
-        return [...workspaces]
-          .sort((left, right) => (recent.get(right.workspaceId) ?? 0) - (recent.get(left.workspaceId) ?? 0))
-          .map(workspace => ({ workspaceId: workspace.workspaceId, title: workspace.title }))
-      }, [workspaces, byId])
 
       // ---- view mutators ----------------------------------------------------
-      const ACTIONS = {
-        renameWorkspace: (id, name) => props.renameWorkspace(id, name),
-        renameSession: (id, name) => props.renameSession(id, name),
-        deleteWorkspace: (id) => props.deleteWorkspace(id),
-      }
+      const fail = useCallback((reason) => { setError(errorText(reason)) }, [])
+      /** Fire an injected async operation and surface its rejection inline. */
+      const settle = useCallback((promise) => { Promise.resolve(promise).catch(fail) }, [fail])
 
-      const fail = React.useCallback((reason) => { setError(errorText(reason)) }, [])
-      const run = React.useCallback((promise) => { Promise.resolve(promise).catch(fail) }, [fail])
+      const openSessionById = useCallback((sessionId) => { props.openSession(sessionId) }, [props.openSession])
 
-      const openSessionById = React.useCallback((sessionId) => { props.openSession(sessionId) }, [props.openSession])
+      const archiveSessionById = useCallback((sessionId) => { settle(props.archiveSession(sessionId)) }, [props.archiveSession, settle])
 
-      const archiveSessionById = React.useCallback((sessionId) => { run(props.archiveSession(sessionId)) }, [props.archiveSession, run])
-
-      const showContextMenu = React.useCallback((target, id, event) => {
+      const showContextMenu = useCallback((target, id, event) => {
         event.preventDefault()
         event.stopPropagation()
-        setPopover({ kind: 'context', target, id, x: clampX(event.clientX), y: clampY(event.clientY) })
+        setPopover({ kind: 'context', target, id, ...originAt(event.clientX, event.clientY, MENU_WIDTH) })
       }, [])
 
-      const assign = React.useCallback((sessionId, groupId) => {
+      const assign = useCallback((sessionId, groupId) => {
         updateView((previous) => {
           const assignment = { ...previous.assignment }
           if (groupId === null) delete assignment[sessionId]
@@ -1083,7 +1190,7 @@ window.__ModuleLoader__.load({
         })
       }, [updateView])
 
-      const createGroup = React.useCallback((name, badge, moveSessionId) => {
+      const createGroup = useCallback((name, badge, moveSessionId) => {
         const id = newGroupId()
         updateView((previous) => ({
           ...previous,
@@ -1095,31 +1202,25 @@ window.__ModuleLoader__.load({
         }))
       }, [updateView])
 
-      const patchGroup = React.useCallback((groupId, patch) => {
+      const patchGroup = useCallback((groupId, patch) => {
         updateView(previous => ({
           ...previous,
           groups: previous.groups.map(group => (group.id === groupId ? { ...group, ...patch } : group)),
         }))
       }, [updateView])
 
-      const moveGroup = React.useCallback((groupId, delta) => {
+      const moveGroup = useCallback((groupId, delta) => {
         updateView((previous) => {
           const index = previous.groups.findIndex(group => group.id === groupId)
-          const target = index + delta
-          if (index < 0 || target < 0 || target >= previous.groups.length) return previous
-          const groups = [...previous.groups]
-          const [moved] = groups.splice(index, 1)
-          groups.splice(target, 0, moved)
+          const groups = moveGroupInList(previous.groups, index, index + delta)
+          if (groups === previous.groups) return previous
+          if (groups.every((group, at) => group.id === previous.groups[at].id)) return previous
           return { ...previous, groups }
         })
       }, [updateView])
 
-      const deleteGroup = React.useCallback((groupId) => {
+      const deleteGroup = useCallback((groupId) => {
         updateView((previous) => {
-          const assignment = {}
-          for (const [sessionId, owner] of Object.entries(previous.assignment)) {
-            if (owner !== groupId) assignment[sessionId] = owner
-          }
           const sessionOrder = { ...previous.sessionOrder }
           delete sessionOrder[GROUP_PREFIX + groupId]
           const groupExpansion = { ...previous.groupExpansion }
@@ -1127,26 +1228,26 @@ window.__ModuleLoader__.load({
           return {
             ...previous,
             groups: previous.groups.filter(group => group.id !== groupId),
-            assignment,
+            assignment: mapRecord(previous.assignment, owner => (owner === groupId ? undefined : owner)),
             sessionOrder,
             groupExpansion,
           }
         })
       }, [updateView])
 
-      const toggleAccount = React.useCallback((key) => {
+      const toggleAccount = useCallback((key) => {
         updateView(previous => ({
           ...previous,
           groupExpansion: { ...previous.groupExpansion, [key]: previous.groupExpansion[key] === false },
         }))
       }, [updateView])
 
-      const switchTab = React.useCallback((tab) => {
+      const switchTab = useCallback((tab) => {
         setPopover(null)
         updateView(previous => (previous.tab === tab ? previous : { ...previous, tab }))
       }, [updateView])
 
-      const setOrder = React.useCallback((orderBy) => {
+      const setOrder = useCallback((orderBy) => {
         setPopover(null)
         updateView((previous) => {
           if (previous.orderBy === orderBy) return previous
@@ -1159,7 +1260,7 @@ window.__ModuleLoader__.load({
         })
       }, [updateView])
 
-      const createSessionIn = React.useCallback(async (workspaceId, groupId) => {
+      const createSessionIn = useCallback(async (workspaceId, groupId) => {
         try {
           const sessionId = await props.createSession(workspaceId === undefined ? {} : { workspaceId })
           if (groupId !== null && groupId !== undefined && sessionId !== undefined && sessionId !== null) {
@@ -1171,74 +1272,70 @@ window.__ModuleLoader__.load({
         }
       }, [props.createSession, props.openSession, updateView])
 
-      const requestNewSession = React.useCallback((account, position) => {
+      /** New session in `account`: a picker for groups, direct in a project. */
+      const requestNewSession = useCallback((account, origin) => {
         if (account.kind === 'group') {
-          setPopover({
-            kind: 'groupPicker',
-            groupId: account.groupId,
-            x: clampX(position?.x ?? 320, PICKER_WIDTH),
-            y: clampY(position?.y ?? 160),
-          })
+          setPopover({ kind: 'groupPicker', groupId: account.groupId, ...origin })
           return
         }
         void createSessionIn(account.workspaceId, null)
       }, [createSessionIn])
 
-      const addWorkspace = React.useCallback(() => {
+      const addWorkspace = useCallback(() => {
         setPopover(null)
-        run(props.addWorkspace())
-      }, [props.addWorkspace, run])
+        settle(props.addWorkspace())
+      }, [props.addWorkspace, settle])
 
-      const closeSearch = React.useCallback(() => {
+      const closeSearch = useCallback(() => {
         setSearch('')
         setSearchOpen(false)
       }, [])
 
       // ---- dialog submit ----------------------------------------------------
-      const LOCAL_DIALOGS = {
-        createGroup: (name) => { createGroup(name, dialog.badge, dialog.moveSessionId) },
-        renameGroup: (name) => { patchGroup(dialog.id, { name }) },
-        deleteGroup: () => { deleteGroup(dialog.id) },
-      }
+      /** Local submits only touch the persisted viewing state. */
+      const LOCAL_SUBMIT = useMemo(() => ({
+        createGroup: (state, name) => { createGroup(name, state.badge, state.moveSessionId) },
+        renameGroup: (state, name) => { patchGroup(state.id, { name }) },
+        deleteGroup: (state) => { deleteGroup(state.id) },
+      }), [createGroup, patchGroup, deleteGroup])
 
       const submitDialog = () => {
         if (dialog === null || dialog.busy) return
-        const name = dialog.value.trim()
         const spec = DIALOG_SPEC[dialog.kind]
+        const name = dialog.value.trim()
         if (spec.danger !== true && name === '') return
-        const local = LOCAL_DIALOGS[dialog.kind]
-        if (local !== undefined) {
-          local(name)
+        if (spec.local !== undefined) {
+          LOCAL_SUBMIT[spec.local](dialog, name)
           closeDialog()
           return
         }
         patchDialog({ busy: true, error: null })
-        Promise.resolve(ACTIONS[dialog.kind](dialog.id, name)).then(closeDialog, (reason) => {
+        Promise.resolve(props[spec.remote](dialog.id, name)).then(closeDialog, (reason) => {
           patchDialog({ busy: false, error: errorText(reason) })
         })
       }
 
       // ---- drag -------------------------------------------------------------
-      const finishDrag = React.useCallback((activeDrag, target) => {
-        setDrag(null)
-        const sourceKey = activeDrag.accountKey
+      /** Reorder inside one account and switch the page to manual order. */
+      const reorderWithin = useCallback((activeDrag, target) => {
+        const { accountKey, sessionId } = activeDrag
+        if (target.head !== true && target.sessionId === sessionId) return
+        const order = orderedRef.current.get(accountKey) ?? [sessionId]
+        const next = order.filter(id => id !== sessionId)
+        const at = insertIndex(next, target)
+        if (at < 0) return
+        next.splice(at, 0, sessionId)
+        updateView(previous => ({
+          ...previous,
+          orderBy: 'manual',
+          sessionOrder: { ...previous.sessionOrder, [accountKey]: next },
+        }))
+      }, [updateView])
+
+      /** Reassign a session to another account, keeping the manual order in step. */
+      const moveAcross = useCallback((activeDrag, target) => {
+        const { accountKey: sourceKey, sessionId } = activeDrag
         const targetKey = target.accountKey
-        const sessionId = activeDrag.sessionId
-        if (sourceKey === targetKey) {
-          const order = orderedRef.current.get(sourceKey) ?? [sessionId]
-          if (target.head !== true && target.sessionId === sessionId) return
-          const next = order.filter(id => id !== sessionId)
-          const at = insertIndex(next, target)
-          if (at < 0) return
-          next.splice(at, 0, sessionId)
-          updateView(previous => ({
-            ...previous,
-            orderBy: 'manual',
-            sessionOrder: { ...previous.sessionOrder, [sourceKey]: next },
-          }))
-          return
-        }
-        if (viewRef.current.tab !== 'groups') return
         const targetGroupId = targetKey.startsWith(GROUP_PREFIX) ? targetKey.slice(GROUP_PREFIX.length) : null
         updateView((previous) => {
           const assignment = { ...previous.assignment }
@@ -1246,7 +1343,8 @@ window.__ModuleLoader__.load({
           else assignment[sessionId] = targetGroupId
           if (previous.orderBy !== 'manual') return { ...previous, assignment }
           const sessionOrder = { ...previous.sessionOrder }
-          sessionOrder[sourceKey] = (sessionOrder[sourceKey] ?? orderedRef.current.get(sourceKey) ?? []).filter(id => id !== sessionId)
+          const sourceOrder = sessionOrder[sourceKey] ?? orderedRef.current.get(sourceKey) ?? []
+          sessionOrder[sourceKey] = sourceOrder.filter(id => id !== sessionId)
           const targetOrder = [...(sessionOrder[targetKey] ?? orderedRef.current.get(targetKey) ?? [])]
           const at = insertIndex(targetOrder, target)
           targetOrder.splice(at < 0 ? targetOrder.length : at, 0, sessionId)
@@ -1255,8 +1353,15 @@ window.__ModuleLoader__.load({
         })
       }, [updateView])
 
+      /** Commit a pending session drop. */
+      const finishDrag = useCallback((activeDrag, target) => {
+        setDrag(null)
+        if (activeDrag.accountKey === target.accountKey) reorderWithin(activeDrag, target)
+        else if (viewRef.current.tab === 'groups') moveAcross(activeDrag, target)
+      }, [reorderWithin, moveAcross])
+
       /** Commit a group reorder; a drop on the dragged group itself is a no-op. */
-      const finishGroupDrag = React.useCallback((draggedId, target) => {
+      const finishGroupDrag = useCallback((draggedId, target) => {
         setDrag(null)
         if (target === null || target === undefined || target.groupId === draggedId) return
         updateView((previous) => {
@@ -1269,99 +1374,101 @@ window.__ModuleLoader__.load({
         })
       }, [updateView])
 
-      const beginDrag = React.useCallback((accountKey, sessionId, event) => {
+      /** Shared opener: remember the dragged target and seed the transfer. */
+      const openDrag = useCallback((state, token, event) => {
         dropCommittedRef.current = false
-        setDrag({ kind: 'session', accountKey, sessionId, over: null })
+        setDrag({ ...state, over: null })
         const transfer = event.dataTransfer
         if (transfer === null) return
         transfer.effectAllowed = 'move'
-        transfer.setData('text/plain', sessionId)
+        transfer.setData('text/plain', token)
       }, [])
+
+      const beginDrag = useCallback((accountKey, sessionId, event) => {
+        openDrag({ kind: 'session', accountKey, sessionId }, sessionId, event)
+      }, [openDrag])
 
       /** Start reordering the group whose head is being dragged. */
-      const beginGroupDrag = React.useCallback((groupId, event) => {
-        dropCommittedRef.current = false
-        setDrag({ kind: 'group', groupId, over: null })
-        const transfer = event.dataTransfer
-        if (transfer === null) return
-        transfer.effectAllowed = 'move'
-        transfer.setData('text/plain', groupId)
-      }, [])
+      const beginGroupDrag = useCallback((groupId, event) => {
+        openDrag({ kind: 'group', groupId }, groupId, event)
+      }, [openDrag])
 
-      const hoverRow = React.useCallback((accountKey, sessionId, event) => {
-        if (!dragAllowed(dragRef.current, viewRef.current.tab, accountKey)) return
+      /** Accept the drag over `event.currentTarget` and report the half it is over. */
+      const acceptOver = useCallback((event) => {
         event.preventDefault()
         if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'move'
-        const box = event.currentTarget.getBoundingClientRect()
-        const half = event.clientY < box.top + box.height / 2 ? 'before' : 'after'
-        setDrag(previous => (sameRowTarget(previous.over, accountKey, sessionId, half)
-          ? previous
-          : { ...previous, over: { accountKey, sessionId, half } }))
+        return dropHalf(event.currentTarget.getBoundingClientRect(), event.clientY)
       }, [])
 
-      const hoverHead = React.useCallback((accountKey, event) => {
+      /** Remember the drop marker, skipping updates that would not change it. */
+      const setOver = useCallback((next) => {
+        setDrag(previous => (previous === null || sameMarker(previous.over, next) ? previous : { ...previous, over: next }))
+      }, [])
+
+      const clearOver = useCallback(() => {
+        setDrag(previous => (previous === null || previous.over === null ? previous : { ...previous, over: null }))
+      }, [])
+
+      /** Claim the one drop a drag may commit; `false` for a repeated event. */
+      const takeDrop = useCallback(() => {
+        if (dropCommittedRef.current) return false
+        dropCommittedRef.current = true
+        return true
+      }, [])
+
+      const hoverRow = useCallback((accountKey, sessionId, event) => {
+        if (!dragAllowed(dragRef.current, viewRef.current.tab, accountKey)) return
+        setOver({ accountKey, sessionId, half: acceptOver(event) })
+      }, [acceptOver, setOver])
+
+      const hoverHead = useCallback((accountKey, event) => {
         const current = dragRef.current
         if (current === null) return
         if (isGroupDrag(current)) {
           if (!accountKey.startsWith(GROUP_PREFIX)) return
           const groupId = accountKey.slice(GROUP_PREFIX.length)
           if (groupId === current.groupId) {
-            setDrag(previous => (previous.over === null ? previous : { ...previous, over: null }))
+            clearOver()
             return
           }
-          event.preventDefault()
-          if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'move'
-          const box = event.currentTarget.getBoundingClientRect()
-          const half = event.clientY < box.top + box.height / 2 ? 'before' : 'after'
-          setDrag(previous => (sameHeadMarker(previous.over, groupId, half)
-            ? previous
-            : { ...previous, over: { groupId, half } }))
+          setOver({ groupId, half: acceptOver(event) })
           return
         }
         if (!dragAllowed(current, viewRef.current.tab, accountKey)) return
-        event.preventDefault()
-        if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'move'
-        setDrag(previous => (sameHeadTarget(previous.over, accountKey)
-          ? previous
-          : { ...previous, over: { accountKey, head: true } }))
-      }, [])
+        acceptOver(event)
+        setOver({ accountKey, head: true })
+      }, [acceptOver, clearOver, setOver])
 
-      const dropRow = React.useCallback((accountKey, sessionId, event) => {
+      const dropRow = useCallback((accountKey, sessionId, event) => {
         const current = dragRef.current
         if (!dragAllowed(current, viewRef.current.tab, accountKey)) return
         event.preventDefault()
-        if (dropCommittedRef.current) return
-        dropCommittedRef.current = true
-        const over = current.over
-        const target = sameRowTarget(over, accountKey, sessionId, 'before') || sameRowTarget(over, accountKey, sessionId, 'after')
-          ? over
-          : { accountKey, sessionId, half: 'after' }
-        finishDrag(current, target)
-      }, [finishDrag])
+        if (!takeDrop()) return
+        finishDrag(current, rowOver(current.over, accountKey, sessionId) === ''
+          ? { accountKey, sessionId, half: 'after' }
+          : current.over)
+      }, [finishDrag, takeDrop])
 
-      const dropHead = React.useCallback((accountKey, event) => {
+      const dropHead = useCallback((accountKey, event) => {
         const current = dragRef.current
         if (current === null) return
         if (isGroupDrag(current)) {
           if (!accountKey.startsWith(GROUP_PREFIX)) return
           event.preventDefault()
-          if (dropCommittedRef.current) return
-          dropCommittedRef.current = true
+          if (!takeDrop()) return
           const groupId = accountKey.slice(GROUP_PREFIX.length)
-          const over = current.over
-          finishGroupDrag(current.groupId, over !== undefined && over !== null && over.groupId === groupId
-            ? over
-            : { groupId, half: 'after' })
+          finishGroupDrag(current.groupId, groupOver(current.over, groupId) === ''
+            ? { groupId, half: 'after' }
+            : current.over)
           return
         }
         if (!dragAllowed(current, viewRef.current.tab, accountKey)) return
         event.preventDefault()
-        if (dropCommittedRef.current) return
-        dropCommittedRef.current = true
-        finishDrag(current, sameHeadTarget(current.over, accountKey) ? current.over : { accountKey, head: true })
-      }, [finishDrag, finishGroupDrag])
+        if (!takeDrop()) return
+        finishDrag(current, isHeadOver(current.over, accountKey) ? current.over : { accountKey, head: true })
+      }, [finishDrag, finishGroupDrag, takeDrop])
 
-      const endDrag = React.useCallback(() => {
+      const endDrag = useCallback(() => {
         const current = dragRef.current
         setDrag(null)
         if (dropCommittedRef.current || current === null) return
@@ -1372,15 +1479,20 @@ window.__ModuleLoader__.load({
         else finishDrag(current, over)
       }, [finishDrag, finishGroupDrag])
 
-      // ---- menus ------------------------------------------------------------
-      const entry = (key, label, run, extra) => ({ key, label, run, ...extra })
-      const heading = (key, label) => ({ key, heading: label })
-      const separator = key => ({ key, separator: true })
+      // Bump a version whenever a row callback changes identity, so cached row
+      // elements are rebuilt instead of keeping a stale closure.
+      const rowHandlers = [openSessionById, showContextMenu, beginDrag, hoverRow, dropRow, endDrag, archiveSessionById]
+      if (rowHandlers.some((handler, at) => handler !== handlerSetRef.current[at])) {
+        handlerSetRef.current = rowHandlers
+        handlerVersionRef.current += 1
+      }
+      const handlerVersion = handlerVersionRef.current
 
+      // ---- menus ------------------------------------------------------------
       const sortEntries = () => [
-        heading('heading', t('sort.label')),
-        entry('updated', t('sort.updated'), () => { setOrder('updated') }, { icon: IconClock, selected: view.orderBy === 'updated' }),
-        entry('manual', t('sort.manual'), () => { setOrder('manual') }, { icon: IconSortArrows, selected: view.orderBy === 'manual' }),
+        menuHeading('heading', t('sort.label')),
+        menuItem('updated', t('sort.updated'), () => { setOrder('updated') }, { icon: IconClock, selected: view.orderBy === 'updated' }),
+        menuItem('manual', t('sort.manual'), () => { setOrder('manual') }, { icon: IconSortArrows, selected: view.orderBy === 'manual' }),
       ]
 
       const sessionEntries = (sessionId) => {
@@ -1388,25 +1500,25 @@ window.__ModuleLoader__.load({
         const owner = view.assignment[sessionId]
         const entries = []
         if (view.groups.length > 0) {
-          entries.push(heading('heading-move', t('session.moveTo')))
+          entries.push(menuHeading('heading-move', t('session.moveTo')))
           for (const group of view.groups) {
-            entries.push(entry('move:' + group.id, group.name, () => { assign(sessionId, group.id) }, {
+            entries.push(menuItem('move:' + group.id, group.name, () => { assign(sessionId, group.id) }, {
               icon: () => h('span', { key: 'badge', className: 'wsg-menu-badge' }, group.badge),
               selected: owner === group.id,
             }))
           }
         }
-        entries.push(entry('move-new', t('session.moveToNew'), () => { openDialog('createGroup', { moveSessionId: sessionId }) }))
+        entries.push(menuItem('move-new', t('session.moveToNew'), () => { openDialog('createGroup', { moveSessionId: sessionId }) }))
         if (typeof owner === 'string' && owner !== '') {
-          entries.push(entry('move-out', t('session.removeFromGroup'), () => { assign(sessionId, null) }))
+          entries.push(menuItem('move-out', t('session.removeFromGroup'), () => { assign(sessionId, null) }))
         }
-        const title = summary === undefined ? '' : (summary.blank === true ? t('session.new') : summary.displayTitle)
+        const title = summary === undefined ? '' : (summary.blank === true ? blankTitle : summary.displayTitle)
         entries.push(
-          separator('sep-1'),
-          entry('rename', t('session.rename'), () => { openDialog('renameSession', { id: sessionId, value: title }) }),
-          entry('fork', t('session.fork'), () => { run(props.forkSession(sessionId)) }),
-          separator('sep-2'),
-          entry('archive', t('session.archive'), () => { run(props.archiveSession(sessionId)) }, { danger: true }),
+          menuSeparator('sep-1'),
+          menuItem('rename', t('session.rename'), () => { openDialog('renameSession', { id: sessionId, value: title }) }),
+          menuItem('fork', t('session.fork'), () => { settle(props.forkSession(sessionId)) }),
+          menuSeparator('sep-2'),
+          menuItem('archive', t('session.archive'), () => { settle(props.archiveSession(sessionId)) }, { danger: true }),
         )
         return entries
       }
@@ -1415,22 +1527,22 @@ window.__ModuleLoader__.load({
         const index = view.groups.findIndex(group => group.id === groupId)
         const group = index < 0 ? undefined : view.groups[index]
         return [
-          entry('rename', t('group.rename'), () => { openDialog('renameGroup', { id: groupId, value: group?.name ?? '' }) }),
-          entry('badge', t('group.badge'), () => { setPopover({ kind: 'badge', groupId, x: clampX(popover.x), y: clampY(popover.y) }) }),
-          entry('up', t('group.moveUp'), () => { moveGroup(groupId, -1) }, { disabled: index <= 0 }),
-          entry('down', t('group.moveDown'), () => { moveGroup(groupId, 1) }, { disabled: index < 0 || index >= view.groups.length - 1 }),
-          separator('sep'),
-          entry('delete', t('group.delete'), () => { openDialog('deleteGroup', { id: groupId, name: group?.name ?? '' }) }, { danger: true }),
+          menuItem('rename', t('group.rename'), () => { openDialog('renameGroup', { id: groupId, value: group?.name ?? '' }) }),
+          menuItem('badge', t('group.badge'), () => { setPopover({ kind: 'badge', groupId, ...originAt(popover.x, popover.y, PICKER_WIDTH) }) }),
+          menuItem('up', t('group.moveUp'), () => { moveGroup(groupId, -1) }, { disabled: index <= 0 }),
+          menuItem('down', t('group.moveDown'), () => { moveGroup(groupId, 1) }, { disabled: index < 0 || index >= view.groups.length - 1 }),
+          menuSeparator('sep'),
+          menuItem('delete', t('group.delete'), () => { openDialog('deleteGroup', { id: groupId, name: group?.name ?? '' }) }, { danger: true }),
         ]
       }
 
       const projectEntries = (workspaceId) => {
         const title = workspaces.find(candidate => candidate.workspaceId === workspaceId)?.title ?? ''
         return [
-          entry('new', t('project.newSession'), () => { void createSessionIn(workspaceId, null) }),
-          entry('rename', t('workspace.rename'), () => { openDialog('renameWorkspace', { id: workspaceId, value: title }) }),
-          separator('sep'),
-          entry('delete', t('workspace.delete'), () => { openDialog('deleteWorkspace', { id: workspaceId, name: title }) }, { danger: true }),
+          menuItem('new', t('project.newSession'), () => { void createSessionIn(workspaceId, null) }),
+          menuItem('rename', t('workspace.rename'), () => { openDialog('renameWorkspace', { id: workspaceId, value: title }) }),
+          menuSeparator('sep'),
+          menuItem('delete', t('workspace.delete'), () => { openDialog('deleteWorkspace', { id: workspaceId, name: title }) }, { danger: true }),
         ]
       }
 
@@ -1442,20 +1554,20 @@ window.__ModuleLoader__.load({
       }
 
       // ---- rendering --------------------------------------------------------
-      const renderMenuEntry = (entry) => {
-        if (entry.separator === true) return h('div', { key: entry.key, className: 'wsg-menu-sep' })
-        if (entry.heading !== undefined) return h('div', { key: entry.key, className: 'wsg-menu-heading' }, entry.heading)
+      const renderMenuEntry = (item) => {
+        if (item.separator === true) return h('div', { key: item.key, className: 'wsg-menu-sep' })
+        if (item.heading !== undefined) return h('div', { key: item.key, className: 'wsg-menu-heading' }, item.heading)
         return h('button', {
-          key: entry.key,
+          key: item.key,
           type: 'button',
           role: 'menuitem',
-          className: 'wsg-menu-item' + (entry.danger === true ? ' wsg-menu-item-danger' : ''),
-          disabled: entry.disabled === true,
-          onClick: () => { if (entry.disabled === true) return; closePopover(); entry.run() },
+          className: classes('wsg-menu-item', item.danger === true && 'wsg-menu-item-danger'),
+          disabled: item.disabled === true,
+          onClick: () => { if (item.disabled === true) return; closePopover(); item.action() },
         },
-        h('span', { key: 'icon', className: 'wsg-menu-icon' }, entry.icon === undefined ? null : entry.icon()),
-        h('span', { key: 'label', className: 'wsg-menu-item-label' }, entry.label),
-        h('span', { key: 'check', className: 'wsg-menu-item-check' }, entry.selected === true ? IconCheck() : null))
+        h('span', { key: 'icon', className: 'wsg-menu-icon' }, item.icon === undefined ? null : item.icon()),
+        h('span', { key: 'label', className: 'wsg-menu-item-label' }, item.label),
+        h('span', { key: 'check', className: 'wsg-menu-item-check' }, item.selected === true ? IconCheck() : null))
       }
 
       const popoverShell = (children, width) => h('div', {
@@ -1463,16 +1575,33 @@ window.__ModuleLoader__.load({
         ref: popoverRef,
         className: 'wsg-popover',
         role: 'menu',
-        style: { left: popover.x, top: popover.y, width, maxHeight: Math.max(120, window.innerHeight - popover.y - 16) },
+        style: { left: popover.x, top: popover.y, width, maxHeight: Math.max(FLYOUT_MIN_HEIGHT, window.innerHeight - popover.y - 16) },
       }, children)
 
       const renderBadgeGrid = (current, onPick) => h('div', { key: 'grid', className: 'wsg-badge-grid' },
         BADGE_CHOICES.map(badge => h('button', {
           key: badge,
           type: 'button',
-          className: 'wsg-badge-cell' + (badge === current ? ' wsg-badge-cell-active' : ''),
+          className: classes('wsg-badge-cell', badge === current && 'wsg-badge-cell-active'),
           onClick: () => { onPick(badge) },
         }, badge)))
+
+      /** Workspace choices for the new-session picker, most recently used first. */
+      const groupPickerChoices = () => {
+        const recent = new Map()
+        for (const workspace of workspaces) {
+          let latest = 0
+          for (const id of workspace.sessionIds ?? EMPTY_IDS) {
+            const updatedAt = byId[id]?.updatedAt ?? 0
+            if (updatedAt > latest) latest = updatedAt
+          }
+          recent.set(workspace.workspaceId, latest)
+        }
+        if (workspaces.length === 0) return [{ workspaceId: undefined, title: t('workspace.default') }]
+        return [...workspaces]
+          .sort((left, right) => (recent.get(right.workspaceId) ?? 0) - (recent.get(left.workspaceId) ?? 0))
+          .map(workspace => ({ workspaceId: workspace.workspaceId, title: workspace.title }))
+      }
 
       const renderPopover = () => {
         if (popover === null) return null
@@ -1488,17 +1617,15 @@ window.__ModuleLoader__.load({
             }),
           ], PICKER_WIDTH)
         }
-        const choices = workspaceChoices.length > 0
-          ? workspaceChoices
-          : [{ workspaceId: undefined, title: t('workspace.default') }]
+        const choices = groupPickerChoices()
         return popoverShell([
           h('div', { key: 'heading', className: 'wsg-menu-heading' }, t('workspace.pickTitle')),
-          ...choices.map(choice => renderMenuEntry({
-            key: choice.workspaceId ?? 'default',
-            label: choice.title,
-            icon: () => IconFolder(14),
-            run: () => { void createSessionIn(choice.workspaceId, popover.groupId) },
-          })),
+          ...choices.map(choice => renderMenuEntry(menuItem(
+            choice.workspaceId ?? 'default',
+            choice.title,
+            () => { void createSessionIn(choice.workspaceId, popover.groupId) },
+            { icon: () => IconFolder(14) },
+          ))),
         ], PICKER_WIDTH)
       }
 
@@ -1528,7 +1655,7 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', className: 'wsg-btn', onClick: () => { if (!dialog.busy) closeDialog() }, disabled: dialog.busy }, t('dialog.cancel')),
               h('button', {
                 type: 'button',
-                className: 'wsg-btn ' + (isDelete ? 'wsg-btn-danger' : 'wsg-btn-accent'),
+                className: classes('wsg-btn', isDelete ? 'wsg-btn-danger' : 'wsg-btn-accent'),
                 disabled: dialog.busy || (!isDelete && dialog.value.trim() === ''),
                 onClick: submitDialog,
               }, t(spec.confirm)))))
@@ -1539,22 +1666,34 @@ window.__ModuleLoader__.load({
         if (summary === undefined) return null
         const mark = sessionStatusMark(summary, statuses.get(sessionId), t)
         const title = summary.blank === true
-          ? t('session.new')
+          ? blankTitle
           : (typeof summary.displayTitle === 'string' && summary.displayTitle !== '' ? summary.displayTitle : summary.id)
-        return h(SessionRow, {
+        const tooltip = typeof summary.cwd === 'string' ? summary.cwd : title
+        const timeLabel = relativeLabel(t, summary.updatedAt, now)
+        const statusState = mark === null ? null : mark.state
+        const statusLabel = mark === null ? null : mark.label
+        const pinned = ranks.has(sessionId)
+        const current = sessionId === currentId
+        const marker = sessionDragging ? rowOver(drag.over, account.key, sessionId) : ''
+        const draggable = !searching
+        visibleRowsRef.current.add(sessionId)
+        const signature = [account.key, title, tooltip, timeLabel, statusState, statusLabel, pinned, current, marker, draggable, archiveLabel, handlerVersion].join('\u0000')
+        const cached = rowCacheRef.current.get(sessionId)
+        if (cached !== undefined && cached.signature === signature) return cached.element
+        const element = h(SessionRow, {
           key: sessionId,
           sessionId,
           accountKey: account.key,
           title,
-          tooltip: typeof summary.cwd === 'string' ? summary.cwd : title,
-          timeLabel: formatRelative(t, summary.updatedAt, now),
-          statusState: mark === null ? null : mark.state,
-          statusLabel: mark === null ? null : mark.label,
-          pinned: ranks.has(sessionId),
-          current: sessionId === currentId,
-          marker: sessionDragging ? rowMarker(drag.over, account.key, sessionId) : '',
-          draggable: !searching,
-          archiveLabel: t('session.archive'),
+          tooltip,
+          timeLabel,
+          statusState,
+          statusLabel,
+          pinned,
+          current,
+          marker,
+          draggable,
+          archiveLabel,
           onOpen: openSessionById,
           onContextMenu: showContextMenu,
           onDragStart: beginDrag,
@@ -1563,18 +1702,18 @@ window.__ModuleLoader__.load({
           onDragEnd: endDrag,
           onArchive: archiveSessionById,
         })
+        rowCacheRef.current.set(sessionId, { signature, element })
+        return element
       }
 
       const renderDropzone = (account) => {
-        const droppable = account.kind === 'group' || view.tab === 'groups'
+        // Sessions never cross projects, so only the groups tab accepts a drop here.
+        const droppable = view.tab === 'groups'
         return h('button', {
           key: 'dropzone',
           type: 'button',
-          className: 'wsg-dropzone' + (sameHeadTarget(drag?.over, account.key) ? ' wsg-dropzone-active' : ''),
-          onClick: (event) => {
-            const box = event.currentTarget.getBoundingClientRect()
-            requestNewSession(account, { x: clampX(box.left + 8, PICKER_WIDTH), y: clampY(box.bottom + 4) })
-          },
+          className: classes('wsg-dropzone', isHeadOver(drag?.over, account.key) && 'wsg-dropzone-active'),
+          onClick: (event) => { requestNewSession(account, originUnder(event.currentTarget.getBoundingClientRect(), PICKER_WIDTH, 8)) },
           onDragOver: (event) => { if (droppable && !isGroupDrag(dragRef.current)) hoverHead(account.key, event) },
           onDrop: (event) => { if (droppable && !isGroupDrag(dragRef.current)) dropHead(account.key, event) },
         },
@@ -1586,17 +1725,19 @@ window.__ModuleLoader__.load({
         const editableGroup = account.kind === 'group' && account.groupId !== undefined
         const editableProject = account.kind === 'project' && account.workspaceId !== undefined
         const canReorder = editableGroup && view.tab === 'groups' && !searching
-        const reorderMarker = editableGroup ? headMarker(drag?.over, account.groupId) : ''
+        const reorderMarker = editableGroup ? groupOver(drag?.over, account.groupId) : ''
         const draggingThis = editableGroup && isGroupDrag(drag) && drag.groupId === account.groupId
         // An empty bucket only appears while a session drag is live, as a drop
         // target: render its head, not the empty rail.
         const headOnly = account.kind === 'group' && account.groupId === undefined && account.sessions.length === 0
         const head = h('div', {
           key: 'head',
-          className: 'wsg-account-head'
-            + (sameHeadTarget(drag?.over, account.key) ? ' wsg-drop-head' : '')
-            + (reorderMarker === '' ? '' : ' wsg-head-drop-' + reorderMarker)
-            + (draggingThis ? ' wsg-dragging' : ''),
+          className: classes(
+            'wsg-account-head',
+            isHeadOver(drag?.over, account.key) && 'wsg-drop-head',
+            reorderMarker !== '' && 'wsg-head-drop-' + reorderMarker,
+            draggingThis && 'wsg-dragging',
+          ),
           role: 'button',
           tabIndex: 0,
           draggable: canReorder,
@@ -1615,10 +1756,10 @@ window.__ModuleLoader__.load({
           onDrop: (event) => { dropHead(account.key, event) },
           onDragEnd: endDrag,
         },
-        h('span', { key: 'badge', className: 'wsg-badge' + (account.kind === 'project' ? ' wsg-badge-project' : '') },
+        h('span', { key: 'badge', className: classes('wsg-badge', account.kind === 'project' && 'wsg-badge-project') },
           account.kind === 'project' ? IconFolder(14) : (account.badge ?? DEFAULT_BADGE)),
         h('span', { key: 'title', className: 'wsg-account-title' }, account.title),
-        h('span', { key: 'chevron', className: 'wsg-chevron' + (account.expanded ? ' wsg-chevron-open' : '') }, IconChevron()),
+        h('span', { key: 'chevron', className: classes('wsg-chevron', account.expanded && 'wsg-chevron-open') }, IconChevron()),
         h('span', { key: 'spacer', className: 'wsg-head-spacer' }),
         h('span', { key: 'count', className: 'wsg-count' }, String(account.sessions.length)),
         h('button', {
@@ -1629,15 +1770,14 @@ window.__ModuleLoader__.load({
           title: t('session.create'),
           onClick: (event) => {
             event.stopPropagation()
-            const box = event.currentTarget.getBoundingClientRect()
-            requestNewSession(account, { x: clampX(box.left - 8, PICKER_WIDTH), y: clampY(box.bottom + 4) })
+            requestNewSession(account, originUnder(event.currentTarget.getBoundingClientRect(), PICKER_WIDTH, -8))
           },
         }, IconNewChat(14)))
-        if (!account.expanded || headOnly) return h(React.Fragment, { key: account.key }, head)
+        if (!account.expanded || headOnly) return h(Fragment, { key: account.key }, head)
         const rows = account.sessions.length === 0
           ? [renderDropzone(account)]
           : account.sessions.map(sessionId => renderRow(account, sessionId))
-        return h(React.Fragment, { key: account.key }, head, h('div', { key: 'rail', className: 'wsg-rail' }, ...rows))
+        return h(Fragment, { key: account.key }, head, h('div', { key: 'rail', className: 'wsg-rail' }, ...rows))
       }
 
       const renderEmptyState = (key, titleKey, hintKey, actionLabelKey, onAction) => h('div', { key, className: 'wsg-empty-state' },
@@ -1646,6 +1786,7 @@ window.__ModuleLoader__.load({
         h('button', { key: 'action', type: 'button', className: 'wsg-inline-btn', onClick: onAction }, IconPlus(14), t(actionLabelKey)))
 
       const renderBody = () => {
+        visibleRowsRef.current = new Set()
         const rows = []
         if (view.tab === 'groups') {
           if (view.groups.length === 0) {
@@ -1658,6 +1799,10 @@ window.__ModuleLoader__.load({
         if (rows.length === 0) {
           rows.push(h('div', { key: 'empty', className: 'wsg-empty-state' }, searching ? t('search.empty') : t('empty.sessions')))
         }
+        // Drop cached elements of rows nobody renders any more.
+        for (const sessionId of rowCacheRef.current.keys()) {
+          if (!visibleRowsRef.current.has(sessionId)) rowCacheRef.current.delete(sessionId)
+        }
         return rows
       }
 
@@ -1666,7 +1811,7 @@ window.__ModuleLoader__.load({
         type: 'button',
         role: 'tab',
         'aria-selected': view.tab === tab,
-        className: 'wsg-tab' + (view.tab === tab ? ' wsg-tab-active' : ''),
+        className: classes('wsg-tab', view.tab === tab && 'wsg-tab-active'),
         onClick: () => { switchTab(tab) },
       }, icon, h('span', { key: 'label' }, label))
 
@@ -1708,17 +1853,17 @@ window.__ModuleLoader__.load({
 
       const renderToolbar = () => h('div', { key: 'toolbar', className: 'wsg-toolbar' },
         searchOpen
-          ? renderSearchBar()
+          ? [renderSearchBar()]
           : [
             h('div', { key: 'tabs', className: 'wsg-tabs', role: 'tablist' },
-              tabButton('groups', h('span', { key: 'icon', className: 'wsg-tab-hash' }, '#'), t('tab.groups')),
+              tabButton('groups', h('span', { className: 'wsg-tab-hash' }, '#'), t('tab.groups')),
               tabButton('projects', IconFolder(12), t('tab.projects'))),
             h('span', { key: 'spacer', className: 'wsg-head-spacer' }),
             toolbarButton('search', t('search.open'), () => { setSearchOpen(true) }, IconSearch(16)),
             toolbarButton('sort', t('sort.label'), (event) => {
-              const box = event.currentTarget.getBoundingClientRect()
               if (popover?.kind === 'sort') return closePopover()
-              setPopover({ kind: 'sort', x: Math.max(8, box.right - MENU_WIDTH), y: clampY(box.bottom + 4) })
+              const box = event.currentTarget.getBoundingClientRect()
+              setPopover({ kind: 'sort', ...originAt(box.right - MENU_WIDTH, box.bottom + FLYOUT_GAP, MENU_WIDTH) })
             }, IconSortArrows(), { 'aria-expanded': popover?.kind === 'sort' }),
             toolbarButton('create', view.tab === 'groups' ? t('group.create') : t('workspace.add'), () => {
               if (view.tab === 'groups') openDialog('createGroup')
@@ -1745,7 +1890,7 @@ window.__ModuleLoader__.load({
           className: 'wsg-body',
           onScroll: () => { if (popoverOpen) closePopover() },
         },
-        list?.phase === 'ready' ? null : h('div', { key: 'loading', className: 'wsg-empty-state' }, t('loading')),
+        phase === 'ready' ? null : h('div', { key: 'loading', className: 'wsg-empty-state' }, t('loading')),
         renderBody()),
         renderPopover(),
         renderDialog())
@@ -1767,10 +1912,8 @@ window.__ModuleLoader__.load({
       const uiWorkspace = ctx.get('uiWorkspace')
       /** Unwrap a generated Remote result or throw its message. */
       const unwrap = (result) => {
-        if (result !== null && typeof result === 'object' && result.ok === true) return result.value
-        const message = result !== null && typeof result === 'object' && result.error !== null && result.error !== undefined
-          ? result.error.message
-          : undefined
+        if (result?.ok === true) return result.value
+        const message = result?.error?.message
         throw new Error(typeof message === 'string' && message !== '' ? message : 'request failed')
       }
 
@@ -1787,16 +1930,11 @@ window.__ModuleLoader__.load({
           unwrap(result)
         },
         archiveSession: sessionId => uiWorkspace.archiveSession(sessionId),
-        renameWorkspace: async (workspaceId, title) => {
-          await workspaces.rename(workspaceId, title)
-        },
-        deleteWorkspace: async workspaceId => {
-          await workspaces.delete(workspaceId)
-        },
+        renameWorkspace: (workspaceId, title) => workspaces.rename(workspaceId, title),
+        deleteWorkspace: workspaceId => workspaces.delete(workspaceId),
         addWorkspace: async () => {
           const path = await uiWorkspace.pickDirectory()
-          if (path === null || path === undefined || path === '') return null
-          return workspaces.create({ path })
+          return path === null || path === undefined || path === '' ? null : workspaces.create({ path })
         },
       })
 
