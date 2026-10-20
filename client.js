@@ -85,6 +85,8 @@ window.__ModuleLoader__.load({
     const BADGE_ICON_MAP = new Map(BADGE_ICONS.map(icon => [icon.key, icon]))
     const MENU_WIDTH = 208
     const PICKER_WIDTH = 232
+    /** Badge surfaces (dialog and popover) share one roomy picker width. */
+    const BADGE_PICKER_WIDTH = 348
     /** Duration of the running spin; mirrors the `wsg-spin` keyframes. */
     const SPIN_MS = 1500
     /** A clipped title crawls on hover, with the shipped sidebar's feel. */
@@ -177,6 +179,11 @@ window.__ModuleLoader__.load({
     /** Page styles: only host theme tokens carry color; class names are prefixed. */
     const CSS = `
 .wsg-panel{box-sizing:border-box;display:flex;flex-direction:column;flex:1;min-height:0;padding:2px 8px 8px;color:var(--dsw-alias-label-primary);font-size:14px;line-height:20px}
+.wsg-panel-rail{padding:0;align-items:center}
+.wsg-rail-actions{display:flex;flex-direction:column;align-items:center;gap:12px}
+.wsg-rail-btn{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;flex:none;padding:0;border:0;border-radius:var(--dsw-radius-md);background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.wsg-rail-btn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.wsg-rail-btn:focus-visible{outline:var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary));outline-offset:-2px}
 .wsg-toolbar{display:flex;align-items:center;gap:2px;flex:none;padding-bottom:6px;min-width:0}
 .wsg-tabs{display:inline-flex;align-items:center;gap:2px;padding:2px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-2)}
 .wsg-tab{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
@@ -259,6 +266,9 @@ window.__ModuleLoader__.load({
 .wsg-menu-item{display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:4px 8px;border:0;border-radius:var(--dsw-radius-md);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;text-align:left;cursor:pointer;white-space:nowrap;overflow:hidden}
 .wsg-menu-item-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .wsg-menu-item-check{display:inline-flex;width:16px;flex:none;justify-content:center;color:var(--dsw-alias-brand-primary)}
+.wsg-menu-item-submenu .wsg-menu-item-check{color:var(--dsw-alias-label-tertiary)}
+.wsg-menu-item-open{background:var(--dsw-alias-interactive-bg-hover)}
+.wsg-submenu{z-index:61}
 .wsg-menu-item-danger{color:var(--dsw-alias-state-error-primary)}
 .wsg-menu-item:disabled{color:var(--dsw-alias-state-idle-primary);background:transparent;cursor:default}
 .wsg-menu-icon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:20px;flex:none;color:var(--dsw-alias-label-secondary)}
@@ -1093,15 +1103,17 @@ window.__ModuleLoader__.load({
     /**
      * One document listener serves both layers: a mousedown outside a popover
      * dismisses it, Escape closes the dialog and any popover under it.
-     * @param options - open flags, the popover ref, and the two close handlers.
+     * @param options - open flags, both popover refs, and the two close handlers.
      */
     function useLayerDismissal(options) {
-      const { popoverOpen, dialogOpen, popoverRef, onClosePopover, onCloseDialog } = options
+      const { popoverOpen, dialogOpen, popoverRef, submenuRef, onClosePopover, onCloseDialog } = options
       useEffect(() => {
         if (!popoverOpen && !dialogOpen) return undefined
+        const inside = (node) => (popoverRef.current !== null && popoverRef.current.contains(node))
+          || (submenuRef.current !== null && submenuRef.current.contains(node))
         const onPress = (event) => {
           if (!popoverOpen || !(event.target instanceof Node)) return
-          if (popoverRef.current !== null && popoverRef.current.contains(event.target)) return
+          if (inside(event.target)) return
           onClosePopover()
         }
         const onKey = (event) => {
@@ -1115,7 +1127,7 @@ window.__ModuleLoader__.load({
           document.removeEventListener('mousedown', onPress)
           document.removeEventListener('keydown', onKey)
         }
-      }, [popoverOpen, dialogOpen, popoverRef, onClosePopover, onCloseDialog])
+      }, [popoverOpen, dialogOpen, popoverRef, submenuRef, onClosePopover, onCloseDialog])
     }
 
     /**
@@ -1142,7 +1154,9 @@ window.__ModuleLoader__.load({
 
     /** The grouped view that replaces the sidebar's workspace browser. */
     function GroupedWorkspacePanel(props) {
-      const { useSessions, useSessionStatus, useWorkspaces, t } = props
+      const { useSessions, useSessionStatus, useWorkspaces, t, wide, expandSidebar } = props
+      // The shell renders the slot in a 56px rail while the sidebar is collapsed.
+      const isRail = wide === false
       // Fine-grained slices: an unrelated store update keeps these references, so
       // every memo below stays valid instead of rebuilding on each notification.
       const ids = useSessions(state => state?.ids ?? EMPTY_IDS)
@@ -1156,6 +1170,7 @@ window.__ModuleLoader__.load({
       // ---- state -------------------------------------------------------------
       const { view, viewRef, updateView } = usePersistedView()
       const [popover, setPopover] = useState(null)
+      const [submenu, setSubmenu] = useState(null)
       const [dialog, setDialog] = useState(null)
       const [error, setError] = useState(null)
       const [search, setSearch] = useState('')
@@ -1165,6 +1180,8 @@ window.__ModuleLoader__.load({
       const dragRef = useRef(drag)
       dragRef.current = drag
       const popoverRef = useRef(null)
+      const submenuRef = useRef(null)
+      const submenuTimerRef = useRef(null)
       const dropCommittedRef = useRef(false)
       const orderedRef = useRef(new Map())
       // Row elements are pure functions of their primitive props: a store update
@@ -1176,7 +1193,50 @@ window.__ModuleLoader__.load({
       const handlerSetRef = useRef([])
       const handlerVersionRef = useRef(0)
 
-      const closePopover = useCallback(() => { setPopover(null); setBadgeQuery('') }, [])
+      const closePopover = useCallback(() => { setPopover(null); setSubmenu(null); setBadgeQuery('') }, [])
+
+      /** Cancel the hover-away timer that would close the open submenu. */
+      const keepSubmenuOpen = useCallback(() => {
+        if (submenuTimerRef.current === null) return
+        clearTimeout(submenuTimerRef.current)
+        submenuTimerRef.current = null
+      }, [])
+
+      /** Close the submenu after the pointer has had time to travel into it. */
+      const dropSubmenuLater = useCallback(() => {
+        keepSubmenuOpen()
+        submenuTimerRef.current = setTimeout(() => {
+          submenuTimerRef.current = null
+          setSubmenu(null)
+        }, 180)
+      }, [keepSubmenuOpen])
+
+      useEffect(() => () => {
+        if (submenuTimerRef.current !== null) clearTimeout(submenuTimerRef.current)
+      }, [])
+
+      /**
+       * Anchor the move-to-group submenu beside the item that opened it.
+       * @param sessionId - the row whose menu is open.
+       * @param box - the trigger item's rect.
+       */
+      const openSubmenu = useCallback((sessionId, box) => {
+        const width = MENU_WIDTH
+        const toRight = box.right + 2 + width <= window.innerWidth - FLYOUT_MARGIN
+        const left = toRight ? box.right + 2 : box.left - width - 2
+        setSubmenu({
+          sessionId,
+          width,
+          x: Math.max(FLYOUT_TOP_MARGIN, Math.min(left, window.innerWidth - width - FLYOUT_MARGIN)),
+          y: Math.max(FLYOUT_TOP_MARGIN, Math.min(box.top - 4, window.innerHeight - FLYOUT_MIN_HEIGHT - 16)),
+        })
+      }, [])
+
+      /** Click on the trigger: open the submenu, or close it when already open. */
+      const toggleSubmenu = useCallback((sessionId, event) => {
+        if (submenu !== null && submenu.sessionId === sessionId) { setSubmenu(null); return }
+        openSubmenu(sessionId, event.currentTarget.getBoundingClientRect())
+      }, [openSubmenu, submenu])
       const closeDialog = useCallback(() => { setDialog(null) }, [])
       const patchDialog = useCallback((patch) => {
         setDialog(previous => (previous === null ? previous : { ...previous, ...patch }))
@@ -1192,10 +1252,19 @@ window.__ModuleLoader__.load({
         popoverOpen: popover !== null,
         dialogOpen: dialog !== null,
         popoverRef,
+        submenuRef,
         onClosePopover: closePopover,
         onCloseDialog: closeDialog,
       })
       useDocumentDragAccept(drag !== null)
+
+      // A collapsed shell shows only the two rail entries: dismiss whatever was
+      // open so re-expanding starts clean.
+      useEffect(() => {
+        if (!isRail) return
+        setPopover(null)
+        setSubmenu(null)
+      }, [isRail])
 
       // ---- derived data -----------------------------------------------------
       const now = Date.now()
@@ -1291,6 +1360,7 @@ window.__ModuleLoader__.load({
       const showContextMenu = useCallback((target, id, event) => {
         event.preventDefault()
         event.stopPropagation()
+        setSubmenu(null)
         setPopover({ kind: 'context', target, id, ...originAt(event.clientX, event.clientY, MENU_WIDTH) })
       }, [])
 
@@ -1403,6 +1473,18 @@ window.__ModuleLoader__.load({
         setSearch('')
         setSearchOpen(false)
       }, [])
+
+      /** Rail entry: expand the shell, then raise the directory flow. */
+      const railAddWorkspace = useCallback(() => {
+        if (typeof expandSidebar === 'function') expandSidebar()
+        addWorkspace()
+      }, [addWorkspace, expandSidebar])
+
+      /** Rail entry: expand the shell straight into search. */
+      const railSearch = useCallback(() => {
+        if (typeof expandSidebar === 'function') expandSidebar()
+        setSearchOpen(true)
+      }, [expandSidebar])
 
       // ---- dialog submit ----------------------------------------------------
       /** Local submits only touch the persisted viewing state. */
@@ -1608,20 +1690,37 @@ window.__ModuleLoader__.load({
         menuItem('manual', t('sort.manual'), () => { setOrder('manual') }, { icon: IconSortArrows, selected: view.orderBy === 'manual' }),
       ]
 
+      /**
+       * The move-to-group submenu: the group list and the create-and-move action.
+       * @param sessionId - the row the menu was opened for.
+       */
+      const sessionMoveEntries = (sessionId) => {
+        const owner = view.assignment[sessionId]
+        const entries = view.groups.map(group => menuItem('move:' + group.id, group.name, () => { assign(sessionId, group.id) }, {
+          icon: () => badgeNode(group.badge, 'wsg-menu-badge', 12),
+          selected: owner === group.id,
+        }))
+        if (entries.length > 0) entries.push(menuSeparator('sep-move'))
+        entries.push(menuItem('move-new', t('session.moveToNew'), () => { openDialog('createGroup', { moveSessionId: sessionId }) }))
+        return entries
+      }
+
       const sessionEntries = (sessionId) => {
         const summary = byId[sessionId]
         const owner = view.assignment[sessionId]
-        const entries = []
-        if (view.groups.length > 0) {
-          entries.push(menuHeading('heading-move', t('session.moveTo')))
-          for (const group of view.groups) {
-            entries.push(menuItem('move:' + group.id, group.name, () => { assign(sessionId, group.id) }, {
-              icon: () => badgeNode(group.badge, 'wsg-menu-badge', 12),
-              selected: owner === group.id,
-            }))
-          }
-        }
-        entries.push(menuItem('move-new', t('session.moveToNew'), () => { openDialog('createGroup', { moveSessionId: sessionId }) }))
+        const openMoveMenu = submenu !== null && submenu.sessionId === sessionId
+        const entries = [menuItem('move-to', t('session.moveTo'), (event) => {
+          toggleSubmenu(sessionId, event)
+        }, {
+          submenu: true,
+          expanded: openMoveMenu,
+          keepOpen: true,
+          onEnter: (event) => {
+            keepSubmenuOpen()
+            openSubmenu(sessionId, event.currentTarget.getBoundingClientRect())
+          },
+          onLeave: dropSubmenuLater,
+        })]
         if (typeof owner === 'string' && owner !== '') {
           entries.push(menuItem('move-out', t('session.removeFromGroup'), () => { assign(sessionId, null) }))
         }
@@ -1643,7 +1742,7 @@ window.__ModuleLoader__.load({
           menuItem('rename', t('group.rename'), () => { openDialog('renameGroup', { id: groupId, value: group?.name ?? '' }) }),
           menuItem('badge', t('group.badge'), () => {
             setBadgeQuery('')
-            setPopover({ kind: 'badge', groupId, ...originAt(popover.x, popover.y, PICKER_WIDTH) })
+            setPopover({ kind: 'badge', groupId, ...originAt(popover.x, popover.y, BADGE_PICKER_WIDTH) })
           }),
           menuItem('up', t('group.moveUp'), () => { moveGroup(groupId, -1) }, { disabled: index <= 0 }),
           menuItem('down', t('group.moveDown'), () => { moveGroup(groupId, 1) }, { disabled: index < 0 || index >= view.groups.length - 1 }),
@@ -1673,17 +1772,32 @@ window.__ModuleLoader__.load({
       const renderMenuEntry = (item) => {
         if (item.separator === true) return h('div', { key: item.key, className: 'wsg-menu-sep' })
         if (item.heading !== undefined) return h('div', { key: item.key, className: 'wsg-menu-heading' }, item.heading)
+        const isSubmenu = item.submenu === true
         return h('button', {
           key: item.key,
           type: 'button',
           role: 'menuitem',
-          className: classes('wsg-menu-item', item.danger === true && 'wsg-menu-item-danger'),
+          className: classes(
+            'wsg-menu-item',
+            item.danger === true && 'wsg-menu-item-danger',
+            isSubmenu && 'wsg-menu-item-submenu',
+            isSubmenu && item.expanded === true && 'wsg-menu-item-open',
+          ),
           disabled: item.disabled === true,
-          onClick: () => { if (item.disabled === true) return; closePopover(); item.action() },
+          'aria-haspopup': isSubmenu ? 'menu' : undefined,
+          'aria-expanded': isSubmenu ? item.expanded === true : undefined,
+          onPointerEnter: item.onEnter,
+          onPointerLeave: item.onLeave,
+          onClick: (event) => {
+            if (item.disabled === true) return
+            if (item.keepOpen !== true) closePopover()
+            item.action(event)
+          },
         },
         h('span', { key: 'icon', className: 'wsg-menu-icon' }, item.icon === undefined ? null : item.icon()),
         h('span', { key: 'label', className: 'wsg-menu-item-label' }, item.label),
-        h('span', { key: 'check', className: 'wsg-menu-item-check' }, item.selected === true ? IconCheck() : null))
+        h('span', { key: 'check', className: 'wsg-menu-item-check' },
+          isSubmenu ? IconChevron() : (item.selected === true ? IconCheck() : null)))
       }
 
       const popoverShell = (children, width) => h('div', {
@@ -1796,8 +1910,8 @@ window.__ModuleLoader__.load({
             renderBadgePicker(group?.badge ?? DEFAULT_BADGE, (badge, settled) => {
               patchGroup(popover.groupId, { badge: normalizeBadge(badge) })
               if (settled) closePopover()
-            }),
-          ], PICKER_WIDTH)
+            }, { fill: true }),
+          ], BADGE_PICKER_WIDTH)
         }
         const choices = groupPickerChoices()
         return popoverShell([
@@ -1809,6 +1923,26 @@ window.__ModuleLoader__.load({
             { icon: () => IconFolder(14) },
           ))),
         ], PICKER_WIDTH)
+      }
+
+      /** The flyout opened from the session menu's move-to-group item. */
+      const renderSubmenu = () => {
+        if (submenu === null || popover === null || popover.kind !== 'context') return null
+        return h('div', {
+          key: 'submenu',
+          ref: submenuRef,
+          className: 'wsg-popover wsg-submenu',
+          role: 'menu',
+          'aria-label': t('session.moveTo'),
+          style: {
+            left: submenu.x,
+            top: submenu.y,
+            width: submenu.width,
+            maxHeight: Math.max(FLYOUT_MIN_HEIGHT, window.innerHeight - submenu.y - 16),
+          },
+          onPointerEnter: keepSubmenuOpen,
+          onPointerLeave: dropSubmenuLater,
+        }, sessionMoveEntries(submenu.sessionId).map(renderMenuEntry))
       }
 
       const renderDialog = () => {
@@ -2064,6 +2198,30 @@ window.__ModuleLoader__.load({
           onClick: () => { setError(null) },
         }, IconClose(12))))
 
+      if (isRail) {
+        return h('div', { className: 'wsg-panel wsg-panel-rail' },
+          h('style', { key: 'css' }, CSS),
+          h('div', { key: 'rail', className: 'wsg-rail-actions' },
+            h('button', {
+              key: 'add',
+              type: 'button',
+              className: 'wsg-rail-btn',
+              title: t('workspace.add'),
+              'aria-label': t('workspace.add'),
+              onClick: railAddWorkspace,
+            }, IconProjectAdd(16)),
+            h('button', {
+              key: 'search',
+              type: 'button',
+              className: 'wsg-rail-btn',
+              title: t('search.open'),
+              'aria-label': t('search.open'),
+              'aria-expanded': searchOpen,
+              onClick: railSearch,
+            }, IconSearch(16))),
+        )
+      }
+
       return h('div', { className: 'wsg-panel' },
         h('style', { key: 'css' }, CSS),
         renderToolbar(),
@@ -2076,6 +2234,7 @@ window.__ModuleLoader__.load({
         phase === 'ready' ? null : h('div', { key: 'loading', className: 'wsg-empty-state' }, t('loading')),
         renderBody()),
         renderPopover(),
+        renderSubmenu(),
         renderDialog())
     }
 

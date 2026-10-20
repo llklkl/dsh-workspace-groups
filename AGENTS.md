@@ -42,9 +42,9 @@
 - **拖拽谓词**：`isSessionDrag` / `isGroupDrag` / `dragAllowed` / `dropHalf` / `rowOver` / `isHeadOver` / `groupOver` / `sameMarker`，顺序调整 `insertIndex` / `moveGroupInList`。
 - **标题跑马灯**：`scrollTitleTo` / `placeTitle` / `restTitle` 与 `SessionRow` 内的 `startTitleMarquee` / `stopTitleMarquee`（`data-marquee` 把省略号换成两侧渐隐，速度按溢出长度自适应）。
 - **行组件**：`SessionRow`（`memo`；props 全是原始值，便于行缓存命中）。
-- **面板元数据**：`DIALOG_SPEC`（六种对话框：`local` 改视图状态、`remote` 调注入方法）与 `menuItem` / `menuHeading` / `menuSeparator`。
+- **面板元数据**：`DIALOG_SPEC`（六种对话框：`local` 改视图状态、`remote` 调注入方法）与 `menuItem` / `menuHeading` / `menuSeparator`；菜单项可带 `submenu` / `keepOpen` / `onEnter` / `onLeave`，二级菜单由 `sessionMoveEntries` + `renderSubmenu` 渲染。
 - **面板钩子**：`usePersistedView`（读取 + 迁移 + 首次写回 + 唯一写入口）、`useLayerDismissal`（浮层与对话框共用一个 document 监听）、`useDocumentDragAccept`（拖拽期间放行整页落点）。
-- **面板体**：`GroupedWorkspacePanel`——状态、mutators（`assign` / `createGroup` / `patchGroup` / `moveGroup` / `deleteGroup` / `switchTab` / `setOrder` / `createSessionIn` / `requestNewSession` / `addWorkspace`）、拖拽（`beginDrag` / `acceptOver` / `setOver` / `takeDrop` / `finishDrag` / `finishGroupDrag`）、渲染（`renderToolbar` / `renderSearchBar` / `renderBody` / `renderAccount` / `renderRow` / `renderDropzone` / `renderEmptyState` / `renderPopover` / `renderDialog` / `renderError`）。
+- **面板体**：`GroupedWorkspacePanel`——状态、mutators（`assign` / `createGroup` / `patchGroup` / `moveGroup` / `deleteGroup` / `switchTab` / `setOrder` / `createSessionIn` / `requestNewSession` / `addWorkspace`）、折叠态（slot props `wide === false` → 只渲染 `railAddWorkspace` / `railSearch` 两个入口）、拖拽（`beginDrag` / `acceptOver` / `setOver` / `takeDrop` / `finishDrag` / `finishGroupDrag`）、渲染（`renderToolbar` / `renderSearchBar` / `renderBody` / `renderAccount` / `renderRow` / `renderDropzone` / `renderEmptyState` / `renderPopover` / `renderDialog` / `renderError`）。
 - **激活**：`activate(ctx)` 组装 `injected`（`openSession` / `createSession` / `forkSession` / `renameSession` / `archiveSession` / `renameWorkspace` / `deleteWorkspace` / `addWorkspace`）并注册槽位；文件末尾导出 `{ inject, apply }`。
 
 ## 常见改动落点
@@ -55,7 +55,7 @@
 | 新增图标 | `strokeIcon`（描边）或 `glyphIcon`（填充），保持 16px 视框 |
 | 徽章配色 / 图标 | `BADGE_COLORS` / `BADGE_ICONS`（`ink`+`wash`、`shapes`、zh/en 名称自动进字典） |
 | 持久化字段 | `defaultState` + `normalizeState`（含迁移），并走 `usePersistedView` 的写入口 |
-| 右键菜单项 | 菜单构造处用 `menuItem` / `menuHeading` / `menuSeparator`，动作落到 mutator 或 `settle(injected.*)` |
+| 右键菜单项 | 菜单构造处用 `menuItem` / `menuHeading` / `menuSeparator`，动作落到 mutator 或 `settle(injected.*)`；二级菜单给项加 `submenu: true` 并在 `renderSubmenu` 里挂条目 |
 | 对话框 | `DIALOG_SPEC` 加一条：`local` 用本地面板 mutator，`remote` 用注入方法，说明文案放 `desc` |
 | 拖拽行为 | 先改谓词（`rowOver` / `isHeadOver` / `groupOver` / `sameMarker`），再改 `finishDrag` / `finishGroupDrag` |
 | 排序规则 | `recencyOrder` / `accountOrder` / `buildModel`；不要写进渲染层 |
@@ -71,7 +71,8 @@
 ## 验证清单（动过渲染 / 派生 / 拖拽才需要跑）
 
 - [ ] 侧栏只剩分组视图：没有内置工作区列表，也没有多余图标或独立页面。
-- [ ] 页签切换、折叠、搜索（失焦收起、Esc 清空、无匹配组隐藏）。
+- [ ] 页签切换、分组折叠、搜索（失焦收起、Esc 清空、无匹配组隐藏）。
+- [ ] 折叠侧栏：只剩「添加工作区 / 搜索」两个 36px 入口，点搜索展开并聚焦搜索框，点添加工作区展开后拉起目录流程。
 - [ ] hover 会话行：时间原位换成归档按钮，标题与行布局不位移；移开复原。
 - [ ] 溢出标题 hover 横向滚动到末尾、两侧渐隐；移开复位并恢复省略号；系统「减少动态效果」时直接跳末尾。
 - [ ] 六种拖拽：跨组归组并插入、同组排序、拖到「未分组」=移出、拖到空组虚线框=归组、组头调整顺序、项目页签仅同项目内排序。
