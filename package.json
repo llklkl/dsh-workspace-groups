@@ -1,8 +1,8 @@
 {
   "name": "@local/dsh-workspace-groups",
-  "version": "3.3.2",
+  "version": "3.3.3",
   "private": true,
-  "description": "Replaces the sidebar workspace browser with a grouped session view: groups/projects tabs, color+icon badges, drag ordering, local search.",
+  "description": "Grouped sidebar view: groups/projects tabs, color+icon badges, drag ordering, local search.",
   "type": "module",
   "license": "MIT",
   "exports": {
